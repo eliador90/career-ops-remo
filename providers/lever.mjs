@@ -6,12 +6,9 @@
 
 function resolveApiUrl(entry) {
   const url = entry.careers_url || '';
-  // Lever has a US instance (jobs.lever.co / api.lever.co) and an EU instance
-  // (jobs.eu.lever.co / api.eu.lever.co) — match both and route to the right host.
-  const match = url.match(/jobs(?:\.eu)?\.lever\.co\/([^/?#]+)/);
+  const match = url.match(/jobs\.lever\.co\/([^/?#]+)/);
   if (!match) return null;
-  const apiHost = /jobs\.eu\.lever\.co/i.test(url) ? 'api.eu.lever.co' : 'api.lever.co';
-  return `https://${apiHost}/v0/postings/${match[1]}`;
+  return `https://api.lever.co/v0/postings/${match[1]}`;
 }
 
 /** @type {Provider} */
@@ -33,6 +30,9 @@ export default {
       url: j.hostedUrl || '',
       company: entry.name,
       location: j.categories?.location || '',
+      // Lever's v0 postings list ships the full description for free (same
+      // payload, no per-job request) — enables scan.mjs content_filter.
+      description: typeof j.descriptionPlain === 'string' ? j.descriptionPlain : '',
       postedAt: typeof j.createdAt === 'number' ? j.createdAt : undefined,
     }));
   },
