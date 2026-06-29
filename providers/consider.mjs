@@ -24,7 +24,7 @@
 // `consider_size` (default 500) caps how many newest/featured jobs are pulled in
 // the single request. Boards larger than that are truncated (rare for VC boards).
 
-import { toEpochMs } from './_http.mjs';
+import { toEpochMs } from './_dates.mjs';
 
 const ENDPOINT_PATH = '/api-boards/search-jobs';
 const DEFAULT_SIZE = 500;

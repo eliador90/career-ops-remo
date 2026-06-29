@@ -16,7 +16,7 @@
 //
 // Auto-detects from a careers_url containing `joinup.ch`.
 
-import { toEpochMs } from './_http.mjs';
+import { toEpochMs } from './_dates.mjs';
 
 const BROWSE_URL = 'https://joinup.ch/browse/jobs';
 

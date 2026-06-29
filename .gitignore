@@ -33,6 +33,9 @@ writing-samples/*
 config/profile.yml
 portals.yml
 modes/_profile.md
+modes/_custom.md
+article-digest.md
+backup-to-drive.ps1
 .update-dismissed
 .update-lock
 

@@ -41,7 +41,7 @@
 //     careers_url: https://fractionalpulse.com/jobs
 //     enabled: true
 
-import { toEpochMs } from './_http.mjs';
+import { toEpochMs } from './_dates.mjs';
 
 const LIST_URL = 'https://fractionalpulse.com/jobs';
 const ORIGIN = 'https://fractionalpulse.com';

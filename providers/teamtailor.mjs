@@ -9,7 +9,7 @@
 // Lightweight RSS parsing — Teamtailor's feed is well-formed XML with one
 // <item> per posting. No external XML dep needed.
 
-import { toEpochMs } from './_http.mjs';
+import { toEpochMs } from './_dates.mjs';
 
 function assertTeamtailorUrl(url) {
   let parsed;
