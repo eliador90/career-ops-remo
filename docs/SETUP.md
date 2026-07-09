@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- An AI coding CLI — [Claude Code](https://claude.ai/code), Gemini CLI, Codex, Qwen Code, OpenCode, GitHub Copilot CLI, Antigravity CLI, or Grok Build CLI
+- An AI coding CLI — [Claude Code](https://claude.ai/code), Gemini CLI, Codex, Qwen Code, OpenCode, GitHub Copilot CLI, Antigravity CLI, or Grok Build CLI (see [Supported CLIs](SUPPORTED_CLIS.md))
 - [Node.js](https://nodejs.org) 18+ and `git` (`npx` ships with Node — the installer refuses to run without them) — note: the Gemini CLI integration requires Node.js 20+
 - (Optional) Go 1.21+ (for the dashboard TUI)
 
@@ -30,16 +30,18 @@ Evaluate this JD with career-ops auto-pipeline: https://company.com/jobs/123
 Run the career-ops scan mode.
 Run the career-ops pipeline mode.
 Run the career-ops pdf mode.
+Run the career-ops email mode for the latest evaluated role. Draft only; never sends, submits, or clicks.
 Run the career-ops tracker mode.
 ```
 
-For one-shot workers or batch tasks in Codex, use `codex exec`:
+For one-shot workers or batch tasks in Codex, use `codex exec`. See [docs/CODEX.md](CODEX.md) for the full guide.
 
 ```bash
 codex exec "Evaluate this JD with career-ops auto-pipeline: https://company.com/jobs/123"
 codex exec "Run career-ops scan mode in this repo."
 codex exec "Run career-ops pipeline mode for data/pipeline.md."
 codex exec "Run career-ops pdf mode for the latest evaluated role."
+codex exec "Run career-ops email mode for the latest evaluated role. Draft only; do not send, submit, or click anything."
 codex exec "Run career-ops tracker mode and summarize the current statuses."
 ```
 
@@ -74,6 +76,7 @@ npx playwright install chromium
 | Search for offers | `/career-ops scan` or ask the agent to run `scan` |
 | Process pending URLs | `/career-ops pipeline` or ask the agent to run `pipeline` |
 | Generate a PDF | `/career-ops pdf` or ask the agent to run `pdf` |
+| Draft application email | `/career-ops email` or ask the agent to run `email`; draft-only, never sends, submits, or clicks |
 | Batch evaluate | `/career-ops batch` or use `codex exec "Run career-ops batch mode ..."` |
 | Check tracker status | `/career-ops tracker` or ask the agent to run `tracker` |
 | Fill application form | `/career-ops apply` or ask the agent to run `apply` |
@@ -88,7 +91,6 @@ node verify-pipeline.mjs     # Check pipeline integrity
 ## Build Dashboard (Optional)
 
 ```bash
-cd dashboard
-go build -o career-dashboard .
-./career-dashboard --path ..  # Opens TUI pipeline viewer
+npm run serve:dashboard     # Opens TUI pipeline viewer
+npm run build:dashboard     # Optional: build the standalone binary
 ```
