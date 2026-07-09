@@ -8,6 +8,9 @@ data/parser-output/**/*.json
 !data/parser-output/.gitkeep
 !data/parser-output/**/.gitkeep
 data/cache/ats-companies/
+# Received offers/contracts, promise notes, prep reports (PII — never commit)
+data/offers/*
+!data/offers/.gitkeep
 reports/*.md
 !reports/.gitkeep
 output/*
@@ -23,7 +26,17 @@ jds/*
 
 # Interview prep (accumulated STAR+R stories — user data)
 interview-prep/*
+!interview-prep/
 !interview-prep/.gitkeep
+# sessions/ is SYSTEM scaffolding (tracked in SYSTEM_PATHS), not user data —
+# carve it out of the blanket ignore above (matches upstream's .gitignore;
+# without this, update-system.mjs's final `git add` on this path is silently
+# blocked by the ignore rule and the commit step fails without any visible
+# error — see memory project_825_postedat_reconciliation for the pattern).
+!interview-prep/sessions/
+interview-prep/sessions/*
+!interview-prep/sessions/.gitkeep
+!interview-prep/sessions/README.md
 
 # Writing samples (user's personal files — never committed)
 writing-samples/*
