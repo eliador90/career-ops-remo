@@ -19,12 +19,16 @@ import { execFile, execFileSync, execSync } from 'child_process';
 import { readFileSync, writeFileSync, existsSync, unlinkSync, rmSync } from 'fs';
 import { join, dirname, posix as pathPosix } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
-import {
-  ensureSkillEntrypoints,
-  materializeSkillEntrypoints,
-} from './scaffolder/bin/skill-entrypoints.mjs';
 
-export { materializeSkillEntrypoints, ensureSkillEntrypoints };
+// NOTE: this file must stay *self-loading* — no static (top-level) relative
+// imports. A pre-#1245 client's apply() self-reexec checks out ONLY
+// update-system.mjs before re-execing the target updater, so a static top-level
+// relative import here crashes that re-exec with ERR_MODULE_NOT_FOUND on the
+// old→new jump, before the fuller checkout that would materialize the imported
+// module ever runs (#1706). Local modules (e.g. the skill-entrypoints helper
+// under scaffolder/) are instead pulled in lazily at their point of use, by
+// which time the full update stage has already checked them out. The
+// updater-migration and test-all suites enforce this invariant.
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = __dirname;
@@ -54,6 +58,7 @@ export const REEXEC_BUFFER_TIMEOUT_MS = parsePositiveInt(process.env.CAREER_OPS_
 
 // System layer paths — ONLY these files get updated
 const SYSTEM_PATHS = [
+  'modes/README.md',
   'modes/_shared.md',
   'modes/_profile.template.md',
   'modes/_custom.template.md',
@@ -62,6 +67,7 @@ const SYSTEM_PATHS = [
   'modes/cover.md',
   'modes/email.md',
   'modes/add.md',
+  'modes/expand.md',
   'modes/scan.md',
   'modes/batch.md',
   'modes/apply.md',
@@ -76,6 +82,7 @@ const SYSTEM_PATHS = [
   'modes/interview.md',
   'modes/interview-redflag.md',
   'modes/latex.md',
+  'modes/latex-tex.md',
   'modes/followup.md',
   'modes/offer-prep.md',
   'modes/interview-prep.md',
@@ -84,10 +91,10 @@ const SYSTEM_PATHS = [
   'interview-prep/sessions/README.md',
   'modes/patterns.md',
   'modes/titles.md',
+  'modes/upskill.md',
   'modes/update.md',
   'modes/agent-inbox.md',
   'modes/reply-watch.md',
-  'modes/innovatorsroom.md',
   'modes/ar/',
   'modes/da/',
   'modes/de/',
@@ -109,6 +116,8 @@ const SYSTEM_PATHS = [
   'modes/heuristics/',
   'modes/regional/',
   'modes/zh/',
+  'modes/zh/interview/',
+  'modes/zh-TW/',
   'CLAUDE.md',
   'CODEX.md',
   'OPENCODE.md',
@@ -118,6 +127,11 @@ const SYSTEM_PATHS = [
   'build-dashboard.mjs',
   'generate-pdf.mjs',
   'generate-latex.mjs',
+  'extract-latex-content.mjs',
+  'patch-latex-content.mjs',
+  'lib/latex-escape.mjs',
+  'lib/latex-content.mjs',
+  'img-to-pdf.mjs',
   'archive-posting.mjs',
   'application-answers.mjs',
   'generate-cover-letter.mjs',
@@ -137,14 +151,14 @@ const SYSTEM_PATHS = [
   'set-status-tests.mjs',
   'normalize-statuses.mjs',
   'cv-sync-check.mjs',
+  'verify-cv-facts.mjs',
   'update-system.mjs',
   'reserve-report-num.mjs',
   'scan.mjs',
-  'innovatorsroom.mjs',
-  'scripts/test-new-providers.mjs',
   'classify-tier.mjs',
   'scan-ats-full.mjs',
   'match-star.mjs',
+  'jd-skill-gap.mjs',
   'prepare-application.mjs',
   'providers/',
   'seeds/',
@@ -156,12 +170,15 @@ const SYSTEM_PATHS = [
   'liveness-browser.mjs',
   'browser-extract.mjs',
   'analyze-patterns.mjs',
+  'upskill.mjs',
   'stats.mjs',
   'detect-reposts.mjs',
   'fingerprint-core.mjs',
   'process-quality.mjs',
   'process-quality.test.mjs',
   'salary-gap.mjs',
+  'funnel-velocity.mjs',
+  'assessment-log.mjs',
   'followup-cadence.mjs',
   'followup-cadence.test.mjs',
   'invite-match.mjs',
@@ -169,15 +186,20 @@ const SYSTEM_PATHS = [
   'agent-inbox.mjs',
   'followup-seed.mjs',
   'followup-seed-tests.mjs',
+  'profile-language.mjs',
   'gemini-eval.mjs',
   'ollama-eval.mjs',
   'openai-eval.mjs',
+  'openai-tailor.mjs',
+  'eval-golden.mjs',
+  'evals/',
   'openrouter-runner.mjs',
   'test-all.mjs',
   'detect-reposts.test.mjs',
   'test-salary-filter.mjs',
   'test-trust-validator.mjs',
   'tracker-columns-tests.mjs',
+  'tracker-writer-lock-tests.mjs',
   'agent-inbox-tests.mjs',
   'validate-portals.mjs',
   'verify-portals.mjs',
@@ -186,11 +208,16 @@ const SYSTEM_PATHS = [
   'reply-matcher.mjs',
   'reply-matcher.test.mjs',
   'reply-watch.mjs',
+  'paste-reply.mjs',
+  'paste-reply-tests.mjs',
   'batch/batch-prompt.md',
   'batch/batch-runner.sh',
+  'batch/aggregate-tokens.mjs',
   'batch/README.md',
+  'utils/token-tracker.mjs',
   'dashboard/',
   'templates/',
+  'config/cv-facts.example.json',
   'fonts/',
   'examples/',
   'config/profile.example.yml',
@@ -209,6 +236,9 @@ const SYSTEM_PATHS = [
   'writing-samples/README.md',
   'VERSION',
   'DATA_CONTRACT.md',
+  'MANIFESTO.md',
+  'manifesto.mjs',
+  'SIGNATURES.md',
   'CONTRIBUTING.md',
   'MAINTAINERS.md',
   'ARCHITECTURE.md',
@@ -241,6 +271,14 @@ const SYSTEM_PATHS = [
   '.github/',
   'package.json',
   'build-cv-latex.mjs',
+  'build-cv-html.mjs',
+  'cv-sections-core.mjs',
+  'cv-templates.mjs',
+  'test/cv-templates.test.mjs',
+  'test/cover-resolver.test.mjs',
+  'test/profile-photo.test.mjs',
+  'templates/cv-template.zh-minimal.html',
+  'test/zh-minimal-template.test.mjs',
   'scaffolder/',
   'Dockerfile',
   'docker-compose.yml',
@@ -250,7 +288,6 @@ const SYSTEM_PATHS = [
   'plugins/',
   'plugins.mjs',
   'plugins-registry/',
-  'plugins-registry.json',
   'plugin-install.mjs',
   'plugin-audit.mjs',
   'validate-plugin-registry.mjs',
@@ -278,7 +315,6 @@ const BOOTSTRAP_PATHS = [
   'plugins/',
   'plugins.mjs',
   'plugins-registry/',
-  'plugins-registry.json',
   'plugin-install.mjs',
   'plugin-audit.mjs',
   'validate-plugin-registry.mjs',
@@ -826,6 +862,10 @@ async function apply() {
       console.error(`Stale-test prune step failed: ${err.message}`);
     }
 
+    // Lazy import: keep update-system.mjs self-loading (see the top-of-file
+    // note). scaffolder/ was just checked out by the update stage above, so the
+    // module resolves here even on a pre-#1245 old→new re-exec.
+    const { ensureSkillEntrypoints } = await import('./scaffolder/bin/skill-entrypoints.mjs');
     const materializedSkillEntrypoints = ensureSkillEntrypoints(ROOT);
     if (materializedSkillEntrypoints.length > 0) {
       for (const path of materializedSkillEntrypoints) {
@@ -920,13 +960,14 @@ async function apply() {
 
     // 7. Commit the update
     const remote = localVersion(); // Re-read after checkout updated VERSION
+    const pathsToStage = [...updated];
+    const dismissFile = join(ROOT, '.update-dismissed');
+    if (existsSync(dismissFile)) {
+      unlinkSync(dismissFile);
+      pathsToStage.push('.update-dismissed');
+    }
+
     try {
-      const pathsToStage = [...updated];
-      const dismissFile = join(ROOT, '.update-dismissed');
-      if (existsSync(dismissFile)) {
-        unlinkSync(dismissFile);
-        pathsToStage.push('.update-dismissed');
-      }
       prepareMaterializedSkillEntrypointsForStage(materializedSkillEntrypoints);
       addPaths(pathsToStage);
       // Scope the commit to only the staged update paths (#915 bug 2).
@@ -934,13 +975,38 @@ async function apply() {
       // the update commit. Passing the explicit pathspec list constrains the
       // commit to exactly the files this update touched.
       git('commit', '-m', `chore: auto-update system files to v${remote}`, '--', ...pathsToStage);
-    } catch {
-      // Nothing to commit (already up to date)
+    } catch (e) {
+      let commitFailed = false;
+      try {
+        const entries = gitStatusEntries();
+        const changedPaths = new Set(entries.map(entry => entry.path));
+        const allTargetPaths = [...pathsToStage, ...materializedSkillEntrypoints];
+        commitFailed = allTargetPaths.some(p => changedPaths.has(p));
+      } catch (err) {
+        commitFailed = true;
+      }
+
+      if (commitFailed) {
+        const allTargetPaths = [...pathsToStage, ...materializedSkillEntrypoints];
+        const pathspec = allTargetPaths.map(p => `"${p}"`).join(' ');
+        throw new Error(
+          `Update commit failed (files may be staged but not committed).\n` +
+          `    Error: ${e.message.split('\n')[0]}\n` +
+          `    Please run manually to finish the update:\n` +
+          `    git commit -m "chore: auto-update system files to v${remote}" -- ${pathspec}`
+        );
+      }
+      // Otherwise, genuinely nothing to commit (already up to date)
     }
 
     console.log(`\nUpdate complete: v${local} → v${remote}`);
     console.log(`Updated ${updated.length} system paths.`);
     console.log(`Rollback available: node update-system.mjs rollback`);
+
+    console.log('\n-- The CareerOps Manifesto ------------------------------');
+    console.log('A new way of job searching is taking shape. You are');
+    console.log('already practicing it. Read it, sign it if you want to help:');
+    console.log('    npm run manifesto  ·  https://career-ops.org/manifesto?utm_source=updater');
 
   } finally {
     // Remove lock

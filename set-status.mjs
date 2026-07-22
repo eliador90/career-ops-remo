@@ -8,10 +8,14 @@
  * modes (apply Step 9, followup, batch) call this instead of editing the table.
  *
  * Usage:
- *   node set-status.mjs <report#|company> <state> [--note "..."] [--role "..."] [--dry-run] [--json]
+ *   node set-status.mjs <report#|company> <state> [--note "..."] [--role "..."] [--force] [--dry-run] [--json]
  *
  * Row resolution:
- *   - numeric argument → exact match on the # column
+ *   - numeric argument → exact match on the # column; if the tracker has a
+ *     duplicate # (see #1704 — merge-tracker.mjs bug, now fixed, that could
+ *     assign the same # to two rows), --role narrows it, otherwise it fails
+ *     ambiguous with a candidate list instead of silently editing whichever
+ *     row was found first
  *   - otherwise → company match (normalized, same key as merge-tracker dedup);
  *     multiple hits are narrowed with --role (fuzzy, role-matcher.mjs), and
  *     anything still ambiguous fails with a numbered candidate list.
@@ -39,7 +43,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { resolveColumns, parseTrackerRow } from './tracker-parse.mjs';
+import { extractTrackerReportNumbers, resolveColumns, parseTrackerRow } from './tracker-parse.mjs';
 import { roleFuzzyMatch } from './role-matcher.mjs';
 import {
   rebuildRow, resolveTrackerPath, trackerLockDirFor, acquireTrackerLock,
@@ -55,12 +59,13 @@ const EXIT_NOT_FOUND = 2;
 const EXIT_AMBIGUOUS = 3;
 const EXIT_LOCK_TIMEOUT = 4;
 
-const USAGE = `Usage: node set-status.mjs <report#|company> <state> [--note "..."] [--role "..."] [--dry-run] [--json]
+const USAGE = `Usage: node set-status.mjs <report#|company> <state> [--note "..."] [--role "..."] [--force] [--dry-run] [--json]
 
   <report#|company>  Row selector: tracker # (exact) or company name (normalized match)
   <state>            Canonical state from templates/states.yml (aliases accepted)
   --note "..."       Append to the Notes cell ("; "-separated, idempotent)
   --role "..."       Disambiguate when several rows share the company (fuzzy match)
+  --force            Allow a numeric selector when the row's report link carries a different ID
   --dry-run          Resolve and validate, but write nothing
   --json             Machine-readable output on stdout (errors included)`;
 
@@ -68,7 +73,7 @@ const USAGE = `Usage: node set-status.mjs <report#|company> <state> [--note "...
 
 const rawArgs = process.argv.slice(2);
 const positional = [];
-const flags = { note: null, role: null, dryRun: false, json: false };
+const flags = { note: null, role: null, force: false, dryRun: false, json: false };
 
 for (let i = 0; i < rawArgs.length; i++) {
   const a = rawArgs[i];
@@ -82,6 +87,7 @@ for (let i = 0; i < rawArgs.length; i++) {
     flags[a === '--note' ? 'note' : 'role'] = value;
     i++;
   }
+  else if (a === '--force') { flags.force = true; }
   else if (a === '--dry-run') { flags.dryRun = true; }
   else if (a === '--json') { flags.json = true; }
   else if (a.startsWith('--')) { failUsage(`Unknown flag: ${a}`); }
@@ -167,11 +173,28 @@ if (!existsSync(APPS_FILE)) {
 function resolveRow(rows) {
   if (/^\d+$/.test(selector)) {
     const num = parseInt(selector, 10);
-    const row = rows.find(r => r.num === num);
-    if (!row) {
+    let matches = rows.filter(r => r.num === num);
+    if (matches.length === 0) {
       failWith(EXIT_NOT_FOUND, 'not-found', `No tracker row with #${num}`);
     }
-    return row;
+    if (matches.length > 1 && flags.role) {
+      const narrowed = matches.filter(r => roleFuzzyMatch(r.role, flags.role));
+      if (narrowed.length === 1) return narrowed[0];
+      // Fall through with the original list so the candidates stay visible.
+    }
+    if (matches.length > 1) {
+      // A bare report number should never match more than one row — this is
+      // exactly the failure mode from #1704: a stale tracker # reused across
+      // 2+ rows means "the first match" is a silent coin flip on which
+      // company gets edited. Refuse to guess; require --role or the company
+      // selector instead.
+      const candidates = matches.map(r => ({ num: r.num, company: r.company, role: r.role }));
+      const listing = candidates.map(c => `#${c.num}\t${c.company}\t${c.role}`).join('\n');
+      failWith(EXIT_AMBIGUOUS, 'ambiguous',
+        `#${num} is a duplicate tracker number shared by ${matches.length} rows (see #1704) — pass --role to disambiguate, or use the company name instead:\n${listing}`,
+        { candidates });
+    }
+    return matches[0];
   }
 
   const key = normalizeCompany(selector);
@@ -245,6 +268,24 @@ if (rows.length === 0) {
 }
 
 const target = resolveRow(rows);
+
+// A numeric selector is often copied from a report filename. If tracker drift
+// has made the row ID disagree with its local report link, silently updating
+// that row can affect the wrong application. Company selectors remain usable,
+// and --force records an explicit decision to proceed despite the mismatch.
+if (/^\d+$/.test(selector) && !flags.force) {
+  const reportNums = extractTrackerReportNumbers(target.report);
+  const mismatched = reportNums.filter(num => num !== target.num);
+  if (mismatched.length > 0) {
+    failWith(
+      EXIT_AMBIGUOUS,
+      'report-number-mismatch',
+      `Tracker #${target.num} points to report ID(s) ${reportNums.map(num => `#${num}`).join(', ')}. ` +
+        'Use the company selector, repair the Report cell, or re-run with --force.',
+      { trackerNum: target.num, reportNums },
+    );
+  }
+}
 const oldStatus = target.status;
 const note = flags.note != null ? cell(flags.note) : null;
 

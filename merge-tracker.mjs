@@ -98,7 +98,7 @@ try {
 }
 
 // Canonical states and aliases
-const CANONICAL_STATES = ['Evaluated', 'Applied', 'Responded', 'Interview', 'Offer', 'Rejected', 'Discarded', 'SKIP'];
+const CANONICAL_STATES = ['Evaluated', 'Applied', 'Responded', 'Interview', 'Offer', 'Hired', 'Rejected', 'Discarded', 'SKIP'];
 
 /**
  * Convert raw addition status text into one canonical tracker state.
@@ -128,6 +128,7 @@ function validateStatus(status) {
     'entrevista': 'Interview',
     'oferta': 'Offer',
     'rechazado': 'Rejected', 'rechazada': 'Rejected',
+    'contratado': 'Hired', 'contratada': 'Hired', 'accepted': 'Hired', 'accept': 'Hired',
     'descartado': 'Discarded', 'descartada': 'Discarded', 'cerrada': 'Discarded', 'cancelada': 'Discarded',
     'no aplicar': 'SKIP', 'no_aplicar': 'SKIP', 'skip': 'SKIP', 'monitor': 'SKIP',
     'geo blocker': 'SKIP',
@@ -312,7 +313,9 @@ function parseTsvContent(content, filename) {
 
   // Detect pipe-delimited (markdown table row)
   if (content.startsWith('|')) {
-    parts = content.split('|').map(s => s.trim()).filter(Boolean);
+    parts = content.split('|').map(s => s.trim());
+    if (parts[0] === '') parts.shift();
+    if (parts[parts.length - 1] === '') parts.pop();
     if (parts.length < 8) {
       console.warn(`⚠️  Skipping malformed pipe-delimited ${filename}: ${parts.length} fields`);
       return null;
@@ -477,6 +480,29 @@ for (const line of appLines) {
   }
 }
 
+// Full set of numbers already on the tracker (#1704). This is a separate,
+// deliberately narrower pass than the existingApps loop above: it reads only
+// the numeric # cell and skips a row via the same NaN check verify-pipeline.mjs
+// uses, instead of the `.includes('---') / .includes('Empresa')` heuristic —
+// so a company or role field that happens to CONTAIN "Empresa" or "---" (e.g.
+// a Spanish-market company name, or an em-dash-style separator in a title)
+// can't hide that row's number the way it can hide the row from existingApps
+// (which stays as-is; it drives duplicate detection, not numbering). Used
+// below so a new entry's number is checked against every number actually on
+// the tracker, not just the largest one the existingApps loop happened to see.
+const usedNumbers = new Set();
+const MAX_COL_IDX = Math.max(...Object.values(COLMAP));
+for (const line of appLines) {
+  if (!line.startsWith('|')) continue;
+  const parts = line.split('|').map(s => s.trim());
+  if (parts.length <= MAX_COL_IDX) continue;
+  const n = parseInt(parts[COLMAP.num]);
+  if (!isNaN(n) && n !== 0) {
+    usedNumbers.add(n);
+    if (n > maxNum) maxNum = n;
+  }
+}
+
 console.log(`📊 Existing: ${existingApps.length} entries, max #${maxNum}`);
 
 // Read tracker additions
@@ -610,9 +636,24 @@ for (const file of tsvFiles) {
       skipped++;
     }
   } else {
-    // New entry — use the number from the TSV
-    const entryNum = addition.num > maxNum ? addition.num : ++maxNum;
-    if (addition.num > maxNum) maxNum = addition.num;
+    // New entry - preserve the TSV's reserved ID whenever it is actually
+    // free. Parallel workers can finish out of order, so a valid reservation
+    // may be lower than the current tracker maximum (#1733). Renumber only on
+    // a real collision, using the next free ID above the current maximum and
+    // warning loudly so report/tracker drift is visible (#1704).
+    let entryNum;
+    if (!usedNumbers.has(addition.num)) {
+      entryNum = addition.num;
+    } else {
+      entryNum = maxNum + 1;
+      while (usedNumbers.has(entryNum)) entryNum++;
+      console.warn(
+        `⚠️  Tracker #${addition.num} already used; assigning #${entryNum} to ` +
+        `${addition.company} — ${addition.role}. Report link remains ${addition.report}.`,
+      );
+    }
+    usedNumbers.add(entryNum);
+    if (entryNum > maxNum) maxNum = entryNum;
 
     const newLine = buildRow({
       num: entryNum, date: addition.date, company: addition.company, role: addition.role,

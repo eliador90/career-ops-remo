@@ -83,6 +83,17 @@ function makeSandbox(trackerContent, additions = {}) {
   return { dir, tracker, additions: additionsDir, lock };
 }
 
+// Pin scan.mjs's extra dedupe sources inside the sandbox. The module-level
+// paths are relative to process.cwd(), so an in-process call would otherwise
+// read the developer's real data/scan-history.tsv and data/pipeline.md — CI
+// only escapes that because both files are gitignored.
+function sandboxSources(sb) {
+  return {
+    scanHistoryPath: join(sb.dir, 'scan-history.tsv'),
+    pipelinePath: join(sb.dir, 'pipeline.md'),
+  };
+}
+
 // Return the data rows of a tracker (pipe lines that aren't header/separator).
 function dataRows(trackerPath) {
   return readFileSync(trackerPath, 'utf-8')
@@ -201,7 +212,7 @@ const TSV_NO_LOCATION = '2\t2026-02-02\tGlobex\tManager\tApplied\tN/A\t✅\t—\
 {
   const { loadSeenCompanyRoles } = await import('./scan.mjs');
   const sb = makeSandbox(HEADER_10);
-  const seen = loadSeenCompanyRoles(sb.tracker);
+  const seen = loadSeenCompanyRoles(sb.tracker, undefined, sandboxSources(sb));
   if (seen.has('acme::engineer')) pass('scan.mjs: seen-set keys company::role on 10-col tracker');
   else fail(`scan.mjs: seen-set on 10-col tracker — got [${[...seen].join(', ')}]`);
   if (![...seen].some(k => k.includes('remote') || k.includes('4.0/5'))) {
@@ -242,7 +253,7 @@ const TSV_NO_LOCATION = '2\t2026-02-02\tGlobex\tManager\tApplied\tN/A\t✅\t—\
   }
 
   const { loadSeenCompanyRoles } = await import('./scan.mjs');
-  const seen = loadSeenCompanyRoles(sb.tracker);
+  const seen = loadSeenCompanyRoles(sb.tracker, undefined, sandboxSources(sb));
   if (seen.has('acme::engineer') && seen.size === 1) {
     pass('contract: scan.mjs seen-set skips an unknown extra column');
   } else {
@@ -544,6 +555,29 @@ if (!HAS_WEB) {
   }
 
   rmSync(dir, { recursive: true, force: true });
+}
+
+// ── Test 17: pipe rows preserve empty interior cells ──────────────────────
+{
+  const EMPTY_PDF = '| 42 | 2026-01-01 | Foo | Bar Engineer | 4.0/5 | Evaluated |  | [42](reports/042-foo-2026-01-01.md) | some note |';
+  const EMPTY_NOTES = '| 43 | 2026-01-02 | Baz | Platform Engineer | 4.1/5 | Evaluated | ✅ | [43](reports/043-baz-2026-01-02.md) |  | Singapore';
+  const sb = makeSandbox(HEADER_10, { '42-foo.tsv': EMPTY_PDF, '43-baz.tsv': EMPTY_NOTES });
+  const res = runScript('merge-tracker.mjs', [], sb);
+  const foo = dataRows(sb.tracker).find(l => l.includes('Foo'));
+  const baz = dataRows(sb.tracker).find(l => l.includes('Baz'));
+  const fooCells = foo ? foo.split('|').map(s => s.trim()) : [];
+  const bazCells = baz ? baz.split('|').map(s => s.trim()) : [];
+  if (res.code === 0 && fooCells[8] === '' && fooCells[9] === '[42](reports/042-foo-2026-01-01.md)' && fooCells[10] === 'some note') {
+    pass('merge: empty PDF cell does not shift Report or Notes');
+  } else {
+    fail(`merge: empty PDF cell shifted columns (code ${res.code}) row: ${foo}\n${res.stdout}`);
+  }
+  if (res.code === 0 && bazCells[5] === 'Singapore' && bazCells[10] === '') {
+    pass('merge: empty Notes cell does not shift a later Location');
+  } else {
+    fail(`merge: empty Notes cell shifted Location (code ${res.code}) row: ${baz}\n${res.stdout}`);
+  }
+  rmSync(sb.dir, { recursive: true, force: true });
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
