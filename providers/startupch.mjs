@@ -30,17 +30,27 @@ const BROWSER_HEADERS = {
 };
 
 function decodeEntities(s) {
+  // Unescape `&amp;` LAST so it can't double-unescape entities produced by the
+  // other replacements (CodeQL: double escaping/unescaping).
   return s
-    .replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&#x27;/g, "'")
+    .replace(/&#39;/g, "'").replace(/&#x27;/g, "'")
     .replace(/&quot;/g, '"').replace(/&auml;/g, 'ä').replace(/&ouml;/g, 'ö')
-    .replace(/&uuml;/g, 'ü').replace(/&nbsp;/g, ' ').trim();
+    .replace(/&uuml;/g, 'ü').replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&').trim();
 }
 
 async function fetchWithTimeout(url, headers, timeoutMs = 12000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { headers, redirect: 'follow', signal: controller.signal });
+    // redirect:'error' — both hops are pinned to the hardcoded www.startup.ch
+    // host, so a 3xx pointing at a private/metadata IP must never be followed
+    // (matches the SSRF posture of every ctx-routed provider). This provider
+    // keeps its own fetch rather than using ctx.fetchResponse: that helper is
+    // an addition to the system-layer _http.mjs, which `update-system.mjs`
+    // reverts to upstream — depending on it here would silently break this
+    // provider on the next update (the v1.12.0 toEpochMs failure, repeated).
+    const res = await fetch(url, { headers, redirect: 'error', signal: controller.signal });
     if (!res.ok) {
       const body = await res.text().catch(() => '');
       const snippet = body.replace(/\s+/g, ' ').trim().slice(0, 300);
@@ -57,8 +67,11 @@ export default {
   id: 'startupch',
 
   detect(entry) {
-    const url = entry.careers_url || '';
-    return /startup\.ch/i.test(url) ? { url: LIST_URL } : null;
+    // Match the hostname, not the whole URL: a loose test would also claim a
+    // path-spoofed careers_url like https://evil.example/startup.ch.
+    let host;
+    try { host = new URL(entry.careers_url || '').hostname; } catch { return null; }
+    return /(^|\.)startup\.ch$/i.test(host) ? { url: LIST_URL } : null;
   },
 
   async fetch(entry /* , ctx */) {

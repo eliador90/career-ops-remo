@@ -23,18 +23,34 @@
 // These boards are large (1000-2000 jobs) but the API returns them
 // created_at-DESCENDING (newest first), so we paginate newest-first and STOP
 // once postings fall older than `getro_max_age_days`. This is a PAGINATION
-// BOUND for efficiency (don't page through 2000 stale jobs) — the real recency
-// cut is the global freshness_filter in scan.mjs, which reads each job's
-// `postedAt`. The bound default (90d) is kept comfortably wider than the
-// usual 60d freshness window so it never pre-trims jobs the global filter would
-// keep. `getro_max_pages` (default 40) is a hard safety cap. Jobs with no
-// created_at are kept (same "missing data = pass" rule as the location filter).
+// BOUND for efficiency (don't page through 2000 stale jobs); each job still
+// carries `postedAt` (epoch ms) for any downstream freshness handling. The
+// bound default (90d) is deliberately wide. `getro_max_pages` (default 40) is a
+// hard safety cap. Jobs with no created_at are kept ("missing data = pass",
+// same rule as the location filter).
 
-import { toEpochMs } from './_dates.mjs';
+// Getro returns `created_at` as Unix seconds, but older boards have been seen
+// emitting ISO strings, so both shapes are handled. Non-positive values return
+// null: the pagination cutoff below treats null as "undated, keep", whereas a
+// 0 would read as 1970 and stop the walk on the first malformed row.
+function toEpochMs(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || value <= 0) return null;
+    // Values below 1e12 are Unix seconds; at or above, already ms.
+    return value < 1_000_000_000_000 ? value * 1000 : value;
+  }
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) || ms <= 0 ? null : ms;
+}
 
 const API_BASE = 'https://api.getro.com/api/v2/collections';
 const HITS_PER_PAGE = 20;          // API hard-caps page size at 20
 const DEFAULT_MAX_PAGES = 40;      // safety cap: 40 x 20 = 800 newest jobs/board
+// Ceiling on the per-entry `getro_max_pages` override. Without it a typo'd or
+// hostile portals.yml value (getro_max_pages: 10000) turns one board into
+// 10k sequential API calls against a third party.
+const HARD_MAX_PAGES = 200;        // 200 x 20 = 4000 newest jobs/board
 const DEFAULT_MAX_AGE_DAYS = 90;   // pagination bound only; global filter does the real cut
 
 function resolveCollection(entry) {
@@ -59,7 +75,7 @@ export default {
     if (!id) throw new Error(`getro: ${entry.name} needs a numeric 'getro_collection' in portals.yml`);
     const apiUrl = `${API_BASE}/${id}/search/jobs`;
     const maxPages = Number.isInteger(entry.getro_max_pages) && entry.getro_max_pages > 0
-      ? entry.getro_max_pages : DEFAULT_MAX_PAGES;
+      ? Math.min(entry.getro_max_pages, HARD_MAX_PAGES) : DEFAULT_MAX_PAGES;
     const maxAgeDays = Number.isFinite(entry.getro_max_age_days) && entry.getro_max_age_days >= 0
       ? entry.getro_max_age_days : DEFAULT_MAX_AGE_DAYS;
     const cutoffMs = maxAgeDays > 0 ? Date.now() - maxAgeDays * 86_400_000 : 0;
@@ -69,6 +85,9 @@ export default {
     for (let page = 0; page < maxPages && page * HITS_PER_PAGE < total; page++) {
       const json = await ctx.fetchJson(apiUrl, {
         method: 'POST',
+        // redirect:'error' — apiUrl is pinned to api.getro.com (https), so a 3xx
+        // to a private/metadata IP must not be followed (matches every provider).
+        redirect: 'error',
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         body: JSON.stringify({ hitsPerPage: HITS_PER_PAGE, page }),
       });
