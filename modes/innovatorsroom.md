@@ -12,10 +12,11 @@ so one parser handles them):
 (Product Manager / Chief of Staff / Junior Investor JobDrops are *not* subscribed.)
 
 ## Prerequisite (one-time)
-Newsletters go to `[redacted-subscription-address]` and are **auto-forwarded** to
-`[redacted-mcp-account]` (the Gmail account on the Gmail MCP). The forward filter
-should match **any** InnovatorsRoom sender — if some JobDrops don't appear, broaden
-the source-account filter to `from:innovatorsroom.com`.
+Newsletters go to the subscription address and are **auto-forwarded** to the
+account connected to the Gmail MCP (both are configured locally, not recorded
+here). The forward filter should match **any** InnovatorsRoom sender — if some
+JobDrops don't appear, broaden the source-account filter to
+`from:innovatorsroom.com`.
 
 ## Flow
 
