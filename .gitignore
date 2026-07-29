@@ -131,10 +131,23 @@ cl-tmp.html
 modes/triage.md
 batch/triage-prompt.md
 
-# Generated CVs / cover letters must live in output/ (ignored above). They have
-# repeatedly been written into templates/, which IS tracked because it holds
-# cv-template.html — that bypassed every other rule and published 33 tailored
-# CVs to this public fork. Belt and braces:
-templates/cv-remo-*
-templates/cover-remo-*
-templates/cv-candidate-*
+# Generated CVs and cover letters belong in output/ (ignored above). They were
+# repeatedly written into templates/ instead, which IS tracked because it holds
+# cv-template.html, and that is how 33 tailored CVs reached this public fork.
+#
+# FAIL CLOSED, same shape as upstream's data/* rule: ignore everything here,
+# then re-allow only the legitimate system templates. A name-pattern blocklist
+# (templates/cv-remo-*) was tried first and was useless -- it caught only the
+# one naming style already known, and would have missed templates/my-cv.html,
+# templates/cv-2026-09-01.html, templates/resume-remo-kyburz.html and so on.
+#
+# Upstream's template files consistently contain "template" or "example", plus
+# three fixed names. If an update ever adds a template matching none of these,
+# it will be silently invisible to git: check `git status` after every
+# `update-system.mjs apply` and add a negation here if needed.
+templates/*
+!templates/*template*
+!templates/*example*
+!templates/README.md
+!templates/benchmarks.yml
+!templates/states.yml
