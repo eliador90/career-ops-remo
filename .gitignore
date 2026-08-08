@@ -84,7 +84,9 @@ bun.lock
 reports/*-RESERVED.md
 
 # Backup files written by normalize-statuses.mjs / dedup-tracker.mjs
-*.bak
+# Two shapes exist: {file}.bak and {file}.bak-{ISO timestamp}. A plain *.bak
+# glob misses the timestamped form, which can carry user-layer PII.
+*.bak*
 
 # OpenRouter runner — generated data (personal, never commit)
 data/model-blacklist.json
@@ -112,6 +114,20 @@ plan/
 
 # Web — runtime cache/history the dashboard writes locally; nothing here is tracked.
 .career-ops-web/
+
+# Adopted from upstream's .gitignore (2026-08-08). These arrived with v1.25.0's
+# tests but not with the rules themselves, because update-system.mjs does not
+# ship .gitignore -- see memory project_gitignore_fail_open. Re-check this
+# delta after every update.
+.tmp-script-test-*/
+test-results/
+playwright-report/
+!test-fixtures/**
+modes/_brief.md
+.mcp.json
+opencode.json
+.idea/
+.vscode/
 
 # ─── Fork-local (career-ops-remo) ───────────────────────────────────
 # This fork is PUBLIC. Everything below is Remo's own data or tooling

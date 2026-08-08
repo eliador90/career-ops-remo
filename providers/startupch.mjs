@@ -39,6 +39,17 @@ function decodeEntities(s) {
     .replace(/&amp;/g, '&').trim();
 }
 
+// startup.ch's robots.txt sets `Crawl-delay: 10` for `User-agent: *`.
+const CRAWL_DELAY_MS = 10_000;
+
+// Prefer the shared pacing hook when scan.mjs supplies one (same contract the
+// paginating providers use, documented on Context.sleep in _types.js); fall
+// back to a plain timer so this still works when called with a bare ctx.
+function pace(ctx, ms) {
+  if (typeof ctx?.sleep === 'function') return ctx.sleep(ms);
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function fetchWithTimeout(url, headers, timeoutMs = 12000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -74,16 +85,25 @@ export default {
     return /(^|\.)startup\.ch$/i.test(host) ? { url: LIST_URL } : null;
   },
 
-  async fetch(entry /* , ctx */) {
+  async fetch(entry, ctx) {
     // Prime a CFID/CFTOKEN session from the homepage (best-effort).
     let cookie = '';
+    let primed = false;
     try {
       const home = await fetchWithTimeout(HOME_URL, BROWSER_HEADERS);
+      primed = true;
       const setCookies = typeof home.headers.getSetCookie === 'function'
         ? home.headers.getSetCookie()
         : [home.headers.get('set-cookie')].filter(Boolean);
       cookie = setCookies.map(c => c.split(';')[0]).join('; ');
     } catch { /* proceed without a primed cookie */ }
+
+    // https://www.startup.ch/robots.txt declares `Crawl-delay: 10` under
+    // `User-agent: *`, and /jobs is not disallowed there. Two back-to-back
+    // requests ignored that; honour it between the two hops we actually make.
+    // Only wait if the first request went out, so a failed prime does not add
+    // a pointless 10s to every scan.
+    if (primed) await pace(ctx, CRAWL_DELAY_MS);
 
     const res = await fetchWithTimeout(LIST_URL, { ...BROWSER_HEADERS, ...(cookie ? { cookie } : {}) });
     const html = await res.text();
