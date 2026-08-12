@@ -21,10 +21,23 @@
 //
 // Auto-detects from a careers_url containing `startup.ch`.
 
+// Import the canonical browser UA rather than hardcoding one. user-agent.mjs is
+// upstream-owned and registered in SYSTEM_PATHS, so the Chrome version stays
+// current on every update instead of rotting here (this file was pinned to
+// Chrome/124 while upstream had moved to /151 — old enough that bot management
+// may start treating it as suspicious, which is plausibly what produced the
+// 403s that got this provider dropped from upstream in #825).
+//
+// Depending on an upstream export is safe in a way that adding our own helper
+// to a system file was not (the v1.12.0 toEpochMs clobber): the risk here is
+// only that upstream renames the export, which the post-update loadProviders
+// check catches immediately and loudly.
+import { BROWSER_LIKE_USER_AGENT } from '../user-agent.mjs';
+
 const HOME_URL = 'https://www.startup.ch/';
 const LIST_URL = 'https://www.startup.ch/jobs';
 const BROWSER_HEADERS = {
-  'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'user-agent': BROWSER_LIKE_USER_AGENT,
   'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
   'accept-language': 'en-US,en;q=0.9,de;q=0.8',
 };
