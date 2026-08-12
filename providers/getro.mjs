@@ -51,23 +51,7 @@ const DEFAULT_MAX_PAGES = 40;      // safety cap: 40 x 20 = 800 newest jobs/boar
 // hostile portals.yml value (getro_max_pages: 10000) turns one board into
 // 10k sequential API calls against a third party.
 const HARD_MAX_PAGES = 200;        // 200 x 20 = 4000 newest jobs/board
-const DEFAULT_MAX_AGE_DAYS = 90;
-
-// Pace sequential pages of the same board. Getro's Datadog WAF reads a long
-// burst of back-to-back POSTs at one endpoint as scraping and IP-bans the
-// caller (403 "You've been blocked", ~2.5h observed 2026-08-08 on a 40-page
-// board, upstream #2706/#2708). A 403 is correctly non-retryable, so the whole
-// board is lost mid-sweep. 150ms matches upstream PR #2640, measured across 8
-// real boards with zero 403s. Skipped before page 0, so single-page boards and
-// the health probe are unaffected.
-const INTER_PAGE_DELAY_MS = 150;
-
-// Uses ctx.sleep when scan.mjs supplies one (the Context.sleep contract in
-// _types.js) so tests never wall-clock wait; plain timer otherwise.
-function sleep(ms, ctx) {
-  if (typeof ctx?.sleep === 'function') return ctx.sleep(ms);
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}   // pagination bound only; global filter does the real cut
+const DEFAULT_MAX_AGE_DAYS = 90;   // pagination bound only; global filter does the real cut
 
 function resolveCollection(entry) {
   const id = entry.getro_collection;
@@ -99,8 +83,6 @@ export default {
     const out = [];
     let total = Infinity;
     for (let page = 0; page < maxPages && page * HITS_PER_PAGE < total; page++) {
-      if (page > 0) await sleep(INTER_PAGE_DELAY_MS, ctx);
-
       const json = await ctx.fetchJson(apiUrl, {
         method: 'POST',
         // redirect:'error' — apiUrl is pinned to api.getro.com (https), so a 3xx
