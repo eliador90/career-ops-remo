@@ -25,7 +25,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync } from 'fs';
-import yaml from 'js-yaml';
+import * as yaml from 'js-yaml';
 import { buildTitleFilter, buildLocationFilter } from './scan.mjs';
 
 const PORTALS_PATH = process.env.CAREER_OPS_PORTALS || 'portals.yml';

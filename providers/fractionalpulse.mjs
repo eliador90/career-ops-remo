@@ -42,6 +42,7 @@
 //     enabled: true
 
 import { toEpochMs } from './_dates.mjs';
+import { decodeEntities } from './_html-entities.mjs';
 
 const LIST_URL = 'https://fractionalpulse.com/jobs';
 const ORIGIN = 'https://fractionalpulse.com';
@@ -52,18 +53,18 @@ const BROWSER_HEADERS = {
   'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 };
 
-function decodeEntities(s) {
-  return (s || '')
-    .replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&#x27;/g, "'")
-    .replace(/&quot;/g, '"').replace(/&nbsp;/g, ' ')
-    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
-    .trim();
-}
+// The shared decoder is the canonical one (providers/_html-entities.mjs); this
+// file previously carried a private copy, which is the drift that module exists
+// to end. The wrapper only adds what the call sites below rely on and the shared
+// decoder deliberately does not do: tolerate a failed regex capture (undefined)
+// and trim the surrounding whitespace the markup leaves around each field.
+/** @param {unknown} s */
+const cleanText = (s) => decodeEntities(String(s || '')).trim();
 
 // Normalize a country code/name into the wording the location filter expects.
 // US must read "United States" so it hits the "Remote, United States" block key.
 function normalizeCountry(raw) {
-  const v = decodeEntities(String(raw || '')).trim();
+  const v = cleanText(raw);
   if (!v) return '';
   if (/^(us|usa|u\.s\.a?\.?|united states.*|america)$/i.test(v)) return 'United States';
   if (/^(uk|gb|u\.k\.|united kingdom|great britain|england)$/i.test(v)) return 'United Kingdom';
@@ -124,13 +125,13 @@ export default {
     )];
 
     const parsed = cards.map(([full, href, inner]) => {
-      const company = decodeEntities((inner.match(/job-item__company">([^<]+)</i) || [])[1]);
-      const title = decodeEntities((inner.match(/job-item__title">([^<]+)</i) || [])[1]);
+      const company = cleanText((inner.match(/job-item__company">([^<]+)</i) || [])[1]);
+      const title = cleanText((inner.match(/job-item__title">([^<]+)</i) || [])[1]);
       const dateStr = (inner.match(/job-item__date">([^<]+)</i) || [])[1] || '';
       const remote = /data-remote="true"/i.test(full);
       // On-site listing city: the meta tag that is neither the role tag nor the remote tag.
       const tags = [...inner.matchAll(/job-item__tag(--[a-z]+)?"[^>]*>([^<]+)</gi)]
-        .map(m => ({ cls: m[1] || '', txt: decodeEntities(m[2]) }));
+        .map(m => ({ cls: m[1] || '', txt: cleanText(m[2]) }));
       const cityTag = tags.find(t => t.cls !== '--role' && t.cls !== '--remote');
       return {
         url: ORIGIN + href,

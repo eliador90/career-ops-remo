@@ -33,6 +33,7 @@
 // only that upstream renames the export, which the post-update loadProviders
 // check catches immediately and loudly.
 import { BROWSER_LIKE_USER_AGENT } from '../user-agent.mjs';
+import { decodeEntities } from './_html-entities.mjs';
 
 const HOME_URL = 'https://www.startup.ch/';
 const LIST_URL = 'https://www.startup.ch/jobs';
@@ -42,15 +43,14 @@ const BROWSER_HEADERS = {
   'accept-language': 'en-US,en;q=0.9,de;q=0.8',
 };
 
-function decodeEntities(s) {
-  // Unescape `&amp;` LAST so it can't double-unescape entities produced by the
-  // other replacements (CodeQL: double escaping/unescaping).
-  return s
-    .replace(/&#39;/g, "'").replace(/&#x27;/g, "'")
-    .replace(/&quot;/g, '"').replace(/&auml;/g, 'ä').replace(/&ouml;/g, 'ö')
-    .replace(/&uuml;/g, 'ü').replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&').trim();
-}
+// Entity decoding is the shared decoder's job (providers/_html-entities.mjs).
+// The private copy this replaced hand-rolled the umlauts a Swiss board emits and
+// had to unescape `&amp;` last to avoid double-unescaping; the shared decoder is
+// a single pass over the reference, so that ordering hazard does not exist and
+// the named table is a superset. The wrapper adds only the trailing trim the
+// call sites below relied on, which the shared decoder deliberately leaves out.
+/** @param {unknown} s */
+const cleanText = (s) => decodeEntities(String(s || '')).trim();
 
 // startup.ch's robots.txt sets `Crawl-delay: 10` for `User-agent: *`.
 const CRAWL_DELAY_MS = 10_000;
@@ -144,10 +144,10 @@ export default {
       const location = card.match(/location\.png[\s\S]{0,160}?<p[^>]*>([^<]+)<\/p>/i)?.[1] || '';
       seen.add(jid);
       out.push({
-        title: decodeEntities(title),
+        title: cleanText(title),
         url: `https://www.startup.ch/index.cfm?page=137888${pid ? `&profil_id=${pid}` : ''}&JobID=${jid}`,
-        company: decodeEntities(company),
-        location: decodeEntities(location),
+        company: cleanText(company),
+        location: cleanText(location),
       });
     }
     return out;
