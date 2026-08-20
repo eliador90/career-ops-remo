@@ -18,7 +18,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_HTML = join(__dirname, 'fixtures', 'innovatorsroom-jobdrop.html');
 const FIXTURE_PORTALS = join(__dirname, 'fixtures', 'innovatorsroom-portals.yml');
 
-const { parseHtmlRoles, parsePlaintextRoles } =
+const { parseHtmlRoles, parsePlaintextRoles, countHtmlRoleMarkers } =
   await import(pathToFileURL(join(ROOT, 'innovatorsroom.mjs')).href);
 
 console.log('\ninnovatorsroom.mjs — HTML JobDrop layout parsing');
@@ -112,3 +112,104 @@ if (passers.length === 1 && passers[0].company === 'Evotym') {
 const anchor = roles.find(r => r.company === 'Anchor Logistics');
 if (anchor && !titleOk(anchor.title)) pass('Anchor Logistics / Regional Director is correctly excluded by the title filter');
 else fail(`Anchor Logistics unexpectedly passed the title filter: ${JSON.stringify(anchor)}`);
+
+// 8. Cross-card misattribution regressions (code-review finding, reproduced
+// by actually executing the parser against adversarial input before the
+// fix): a malformed card must fail closed — drop only itself — never bleed
+// company/title from an ADJACENT card. Both repros below are two well-formed
+// shape-B cards back to back, with one field removed from the SECOND card.
+
+// 8a. Second card missing its own "FT" badge: the backward FT-search used to
+// have no boundary check, so it would walk straight past the current card
+// into the FIRST card's "FT" and steal ITS company.
+{
+  const twoCards = `
+    <a href="https://elink9aa.innovatorsroom.com/e/c1">Evotym</a>
+    &nbsp;FT&nbsp;
+    <a href="https://elink9aa.innovatorsroom.com/e/t1">Chief Operating Officer</a>
+    &nbsp;<a href="https://elink9aa.innovatorsroom.com/e/a1">🔗</a>
+    <div>🇨🇾 Limassol</div>
+    <a href="https://elink9aa.innovatorsroom.com/e/c2">Solara Energy</a>
+    <a href="https://elink9aa.innovatorsroom.com/e/t2">Founder &amp; CEO</a>
+    <a href="https://elink9aa.innovatorsroom.com/e/a2">🔗</a>
+    <div>🇫🇷 Paris</div>
+  `;
+  const parsed = parseHtmlRoles(twoCards);
+  const stolen = parsed.find(r => r.company === 'Evotym' && r.title === 'Founder & CEO');
+  const solara = parsed.find(r => r.title === 'Founder & CEO');
+  if (!stolen && (!solara || !solara.company)) {
+    pass('a card missing "FT" fails closed instead of stealing the PRIOR card\'s company');
+  } else {
+    fail(`cross-card misattribution regressed: ${JSON.stringify(parsed)}`);
+  }
+}
+
+// 8b. Second (shape-A) card missing its own title link: nextLink() used to
+// have no boundary check either, so it would walk into the NEXT card and
+// grab ITS company as this card's title.
+{
+  const twoTopPicksCards = `
+    <a href="https://elink9aa.innovatorsroom.com/e/c1">Acme Robotics</a>
+    <span>🇩🇪 Berlin</span>
+    <a href="https://elink9aa.innovatorsroom.com/e/a1">🔗</a>
+    <a href="https://elink9aa.innovatorsroom.com/e/c2">Northwind Analytics</a>
+    <span>🇬🇧 London</span>
+    <a href="https://elink9aa.innovatorsroom.com/e/a2">🔗</a>
+    <a href="https://elink9aa.innovatorsroom.com/e/t2">VP of Operations</a>
+  `;
+  const parsed = parseHtmlRoles(twoTopPicksCards);
+  const fabricated = parsed.find(r => r.company === 'Acme Robotics' && r.title === 'Northwind Analytics');
+  if (!fabricated) {
+    pass('a shape-A card missing its own title fails closed instead of borrowing the NEXT card\'s company as a title');
+  } else {
+    fail(`cross-card misattribution regressed: ${JSON.stringify(parsed)}`);
+  }
+}
+
+// 8c. One harmless extra separator token between company and location in a
+// shape-A card must not drop an otherwise fully-recoverable role — the old
+// fixed tokens[i-2] offset had zero tolerance for this; the bounded search
+// that replaced it should recover the same company/title/location a
+// well-formed card would.
+{
+  const separatorCard = `
+    <a href="https://elink9aa.innovatorsroom.com/e/c1">Acme Robotics</a>
+    <span>·</span>
+    <span>🇩🇪 Berlin, Germany</span>
+    <a href="https://elink9aa.innovatorsroom.com/e/a1">🔗</a>
+    <a href="https://elink9aa.innovatorsroom.com/e/t1">Chief Executive Officer</a>
+    <span>Full-time</span>
+  `;
+  const parsed = parseHtmlRoles(separatorCard);
+  const role = parsed.find(r => r.company === 'Acme Robotics');
+  if (role && role.title === 'Chief Executive Officer' && role.location.includes('Berlin')) {
+    pass('a harmless extra separator token between company and location no longer drops the role');
+  } else {
+    fail(`separator-token tolerance regressed: ${JSON.stringify(parsed)}`);
+  }
+}
+
+// 9. countHtmlRoleMarkers() must match parseHtmlRoles().length on the
+// well-formed fixture (no false-positive drift warning on a healthy issue)
+// and DIVERGE when a card fails closed (main() uses this divergence to warn
+// instead of silently under-importing — see the module docstring).
+if (countHtmlRoleMarkers(html) === roles.length) {
+  pass(`countHtmlRoleMarkers() matches parseHtmlRoles().length on the well-formed fixture (${roles.length})`);
+} else {
+  fail(`countHtmlRoleMarkers() drifted from a healthy parse: ${countHtmlRoleMarkers(html)} markers vs ${roles.length} roles`);
+}
+{
+  // Same missing-title card as test 8b — one marker, zero roles recovered.
+  const droppedCard = `
+    <a href="https://elink9aa.innovatorsroom.com/e/c1">Acme Robotics</a>
+    <span>🇩🇪 Berlin</span>
+    <a href="https://elink9aa.innovatorsroom.com/e/a1">🔗</a>
+  `;
+  const markers = countHtmlRoleMarkers(droppedCard);
+  const parsedCount = parseHtmlRoles(droppedCard).length;
+  if (markers === 1 && parsedCount === 0) {
+    pass('countHtmlRoleMarkers() diverges from parseHtmlRoles().length when a card fails closed, as main() relies on to warn');
+  } else {
+    fail(`expected 1 marker / 0 parsed for a title-less card, got ${markers} markers / ${parsedCount} parsed`);
+  }
+}

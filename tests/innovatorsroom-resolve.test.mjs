@@ -3,7 +3,9 @@
 // InnovatorsRoom shape is elink9aa.innovatorsroom.com -> bit.ly -> the ATS
 // destination) in one call and strip utm_*/i12m_id tracking params from
 // wherever they land — off the FINAL resolved URL, not the one it started
-// from, and only the tracking params, never an unrelated query param.
+// from, and only the tracking params (never a functional one like ref/
+// source/src, which url-key.mjs's own dedup-key normalizer deliberately
+// leaves alone).
 //
 // All network is a local server (127.0.0.1) — no real host is contacted.
 import { createServer } from 'node:http';
@@ -31,6 +33,21 @@ console.log('\ninnovatorsroom.mjs — tracking-URL resolution');
   const unchanged = stripTrackingParams('not a url at all');
   if (unchanged === 'not a url at all') pass('stripTrackingParams() passes an unparseable string through untouched');
   else fail(`stripTrackingParams() mangled a non-URL string: ${unchanged}`);
+}
+// url-key.mjs (the repo's canonical dedup-key normalizer) deliberately does
+// NOT strip bare ref/source/src — they're functional params on some ATS
+// boards, and stripping them risks merging two distinct postings into one
+// dedup key. stripTrackingParams() must match that policy so this script's
+// own resolved URLs don't silently diverge from keys normalized elsewhere.
+{
+  const stripped = stripTrackingParams('https://careers.example.com/jobs/42?ref=newsletter&source=jobdrop&src=email&utm_campaign=keep-stripping-this');
+  const u = new URL(stripped);
+  const params = [...u.searchParams.keys()];
+  if (params.includes('ref') && params.includes('source') && params.includes('src') && !params.includes('utm_campaign')) {
+    pass('stripTrackingParams() keeps ref/source/src, matching url-key.mjs\'s documented under-strip policy');
+  } else {
+    fail(`stripTrackingParams() diverged from url-key.mjs's policy: ${stripped}`);
+  }
 }
 
 // 2. resolveTrackingUrl: real two-hop redirect chain over a local server,

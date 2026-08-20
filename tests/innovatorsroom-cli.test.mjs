@@ -109,6 +109,50 @@ function pipelineEntries(dir) {
   }
 }
 
+// ── 1b. Untrusted content injection: a company/title carrying a literal tab
+// or pipe character must not corrupt scan-history.tsv's column count or
+// pipeline.md's `url | company | title` shape (code-review finding — the
+// newsletter is untrusted external content per AGENTS.md, and stripEmoji()
+// only collapses RUNS of 2+ whitespace, so a lone embedded tab used to
+// survive verbatim into the tab-separated write).
+{
+  const dir = sandbox();
+  try {
+    writeFileSync(join(dir, 'portals.yml'), '{}\n');
+    writeFileSync(join(dir, 'issue.txt'),
+      `🇨🇭💻 Zurich - Acme\tRobotics\n` +
+      `https://elink.example.com/company-track\n` +
+      `- Head | Of Finance\n` +
+      `https://elink.example.com/title-track\n` +
+      `🔗\n` +
+      `http://127.0.0.1:1/plain-apply\n`);
+
+    runScript(dir, ['issue.txt', '--issue', 'injection-fixture']);
+
+    const pipeline = readFileSync(join(dir, 'data', 'pipeline.md'), 'utf-8');
+    const entryLine = pipeline.split('\n').find(l => l.startsWith('- [ ]'));
+    const pipeFieldCount = entryLine ? entryLine.split('|').length : 0;
+    if (entryLine && pipeFieldCount === 3 && !entryLine.includes('\t')) {
+      pass('an embedded pipe/tab in company or title does not add a field to the pipeline.md entry');
+    } else {
+      fail(`pipeline.md entry has ${pipeFieldCount} pipe-delimited fields (want 3): ${JSON.stringify(entryLine)}`);
+    }
+
+    const history = readFileSync(join(dir, 'data', 'scan-history.tsv'), 'utf-8');
+    const historyLine = history.split('\n').find(l => l.startsWith('http'));
+    const tsvColumnCount = historyLine ? historyLine.split('\t').length : 0;
+    if (historyLine && tsvColumnCount === 7) {
+      pass('an embedded tab in company or title does not shift scan-history.tsv\'s column count');
+    } else {
+      fail(`scan-history.tsv row has ${tsvColumnCount} columns (want 7, the header's column count): ${JSON.stringify(historyLine)}`);
+    }
+  } catch (err) {
+    fail(`injection-fixture run failed: ${err.message}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 // ── 2 & 3. Direct JobDrop: HTML auto-fallback + dedup idempotency ───────
 {
   const dir = sandbox();

@@ -72,6 +72,17 @@ const stripEmoji = (s) => (s || '').replace(EMOJI_RE, '').replace(/\s{2,}/g, ' '
 const isUrl = (l) => /^<?https?:\/\//.test(l || '');
 const cleanUrl = (l) => (l || '').replace(/^<|>$/g, '').trim();
 
+// Neutralize characters that would corrupt the tab-separated / pipe-delimited
+// files this script writes into. Untrusted email content is the source
+// (AGENTS.md "Untrusted External Content" — a company/title string is data,
+// never structure), so this runs at the WRITE boundary rather than trusting
+// every upstream parser to have already scrubbed it: stripEmoji() only
+// collapses runs of 2+ whitespace, so a single embedded tab survives it
+// untouched, and neither parser strips "|" at all. Applied to every field
+// this script interpolates into data/pipeline.md's `url | company | title`
+// line or data/scan-history.tsv's tab-separated columns.
+const tsvSafe = (s) => (s || '').replace(/[\t\r\n|]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+
 // ── Plaintext parser (forwarded "TechJobs" issues) ───────────────────
 
 /**
@@ -167,6 +178,22 @@ export function tokenizeVisibleHtml(html) {
 const HTML_LOOKAHEAD = 6;
 
 /**
+ * Count "🔗"/"🔒" role-block markers in an HTML body — exactly one per card,
+ * regardless of shape. Compared against parseHtmlRoles()'s actual output
+ * length in main(), this turns a silent under-import (a card that fails
+ * closed because a template tweak broke one of its markers, or any future
+ * shape parseHtmlRoles() doesn't yet handle) into a visible warning instead
+ * of an unexplained lower "Roles parsed" number nobody notices.
+ *
+ * @param {string} html
+ * @returns {number}
+ */
+export function countHtmlRoleMarkers(html) {
+  const tokens = tokenizeVisibleHtml(html);
+  return tokens.filter(t => (t.type === 'link' && t.text.includes('🔗')) || (t.type === 'text' && t.text.includes('🔒'))).length;
+}
+
+/**
  * Parse role blocks out of a direct JobDrop's HTML body. There are three
  * card shapes in the wild (confirmed against the real 2026-08-09 Senior
  * Operator issue — grepping "🔗"/"🔒" counts and a token-by-token dump, not
@@ -176,8 +203,8 @@ const HTML_LOOKAHEAD = 6;
  * by a fixed position — a fixed-offset design silently mis-parses shape B as
  * shape A instead of failing closed:
  *
- *   A. "Top picks" preview cards: company -> location -> "🔗" -> title
- *      (no "FT" badge at all in this section).
+ *   A. "Top picks" preview cards: company -> location -> "🔗" -> title ->
+ *      "Full-time" (no "FT" badge at all in this section).
  *   B. Main-list unlocked cards: company -> "FT" -> title -> "🔗" -> location.
  *   C. Main-list locked cards: "🔒" -> "Upgrade" link (a paywall CTA, not a
  *      real apply link) -> [optional noise, e.g. a salary figure] -> title
@@ -192,6 +219,18 @@ const HTML_LOOKAHEAD = 6;
  * have `company: ''` and `applyUrl: ''`; callers must skip them rather than
  * emit a bogus URL.
  *
+ * FAIL CLOSED ACROSS A CARD BOUNDARY, not just within one. A card missing an
+ * expected token used to have no defense against a neighbor's token bleeding
+ * in — e.g. shape B's backward search for "FT" would walk straight past a
+ * malformed card into the PREVIOUS card's "FT" and steal its company;
+ * `nextLink`/`nextText`/`prevLink` below refuse to cross "🔗"/"🔒"/"FT" (the
+ * only tokens shape B/C ever anchor on) while hunting for something else, and
+ * shape A additionally requires "Full-time" right after a title candidate —
+ * without SOME marker to validate against, a bare link is indistinguishable
+ * from the NEXT card's company. Both failure modes were reproduced by
+ * executing this function against adversarial input during review; see
+ * tests/innovatorsroom-html-parse.test.mjs #8a/#8b.
+ *
  * @param {string} html - Raw HTML email body.
  * @returns {{company: string, title: string, location: string, applyUrl: string, locked: boolean}[]}
  */
@@ -199,15 +238,35 @@ export function parseHtmlRoles(html) {
   const tokens = tokenizeVisibleHtml(html);
   const roles = [];
 
+  // True for any token that starts a DIFFERENT card ("🔗", "🔒", or "FT" —
+  // "FT" always sits between a card's own company and title, so meeting one
+  // while hunting for something else means the current card's own marker was
+  // never found). Every bounded scan below stops at the first one of these it
+  // meets, rather than reading through it — the earlier version had no such
+  // stop, so a card missing its own "FT"/title link would silently walk into
+  // an ADJACENT card and misattribute its company/title instead of failing
+  // closed. Verified against exactly that adversarial input during review.
+  const isCardBoundary = (tok) =>
+    (tok.type === 'link' && tok.text.includes('🔗')) || (tok.type === 'text' && (tok.text === 'FT' || tok.text.includes('🔒')));
+
   const nextLink = (from) => {
     for (let k = from; k < tokens.length && k <= from + HTML_LOOKAHEAD; k++) {
+      if (isCardBoundary(tokens[k])) return null;
       if (tokens[k].type === 'link' && tokens[k].text) return { idx: k, text: stripEmoji(tokens[k].text) };
     }
     return null;
   };
   const nextText = (from) => {
     for (let k = from; k < tokens.length && k <= from + HTML_LOOKAHEAD; k++) {
+      if (isCardBoundary(tokens[k])) return null;
       if (tokens[k].type === 'text' && tokens[k].text) return { idx: k, text: stripEmoji(tokens[k].text) };
+    }
+    return null;
+  };
+  const prevLink = (from) => {
+    for (let k = from; k >= 0 && k >= from - HTML_LOOKAHEAD; k--) {
+      if (isCardBoundary(tokens[k])) return null;
+      if (tokens[k].type === 'link' && tokens[k].text) return { idx: k, text: stripEmoji(tokens[k].text) };
     }
     return null;
   };
@@ -239,21 +298,38 @@ export function parseHtmlRoles(html) {
       let company = '', title = '', location = '';
 
       if (prev && prev.type === 'text' && prev.text) {
-        // Shape A: company -> location -> "🔗" -> title
+        // Shape A: company -> location -> "🔗" -> title -> "Full-time"
         location = stripEmoji(prev.text);
-        const companyTok = tokens[i - 2];
-        company = companyTok && companyTok.type === 'link' ? stripEmoji(companyTok.text) : '';
+        const companyTok = prevLink(i - 2);
+        company = companyTok ? companyTok.text : '';
+        // nextLink() alone can't tell "this card's own title" apart from
+        // "the NEXT card's company link" when this card's title is missing —
+        // neither is a recognized card-boundary token on its own (unlike
+        // shape B, shape A has no marker BEFORE its title to detect against).
+        // "Full-time" is the one marker shape A cards do carry, right after
+        // the title (confirmed on the real 2026-08-09 issue), so require it
+        // to validate a title candidate — same fail-closed contract shape B
+        // gets from "FT". Verified against exactly this adversarial input
+        // (a card with no title link) during review.
         const titleTok = nextLink(i + 1);
-        title = titleTok ? titleTok.text : '';
+        if (titleTok) {
+          const badge = nextText(titleTok.idx + 1);
+          if (badge && /full[\s-]?time/i.test(badge.text)) title = titleTok.text;
+        }
       } else if (prev && prev.type === 'link' && prev.text) {
         // Shape B: company -> "FT" -> title -> "🔗" -> location
         title = stripEmoji(prev.text);
         for (let k = i - 2; k >= 0 && k >= i - HTML_LOOKAHEAD; k--) {
-          if (tokens[k].type === 'text' && tokens[k].text === 'FT') {
+          const tk = tokens[k];
+          if (tk.type === 'text' && tk.text === 'FT') {
             const companyTok = tokens[k - 1];
             company = companyTok && companyTok.type === 'link' ? stripEmoji(companyTok.text) : '';
             break;
           }
+          // "FT" is the success condition above, checked first — this only
+          // catches walking past this card's own start into the PREVIOUS
+          // card's "🔗"/"🔒" without ever finding our own "FT".
+          if ((tk.type === 'link' && tk.text.includes('🔗')) || (tk.type === 'text' && tk.text.includes('🔒'))) break;
         }
         const locationTok = nextText(i + 1);
         location = locationTok ? locationTok.text : '';
@@ -272,6 +348,14 @@ export function parseHtmlRoles(html) {
  * Strip common tracking query params from a resolved URL. `i12m` covers
  * Beehiiv's `i12m_id` param (prefix match), same as `utm_*`.
  *
+ * Deliberately does NOT strip bare `ref`/`source`/`src` — url-key.mjs (the
+ * repo's canonical dedup-key normalizer) documents exactly why: those names
+ * are functional on some ATS boards, and stripping them risks merging two
+ * genuinely different postings into one key. This function's output feeds
+ * `loadSeen()`'s plain string-equality dedup against URLs other writers may
+ * have normalized via url-key.mjs's narrower denylist, so diverging from it
+ * would make the two normalizations silently disagree on the same URL.
+ *
  * @param {string} urlStr
  * @returns {string}
  */
@@ -279,7 +363,7 @@ export function stripTrackingParams(urlStr) {
   try {
     const u = new URL(urlStr);
     for (const p of [...u.searchParams.keys()]) {
-      if (/^(utm_|mc_|ref|source|src|i12m)/i.test(p)) u.searchParams.delete(p);
+      if (/^(utm_|mc_|i12m)/i.test(p)) u.searchParams.delete(p);
     }
     return u.toString();
   } catch { return urlStr; }
@@ -415,6 +499,12 @@ async function main() {
     const html = readFileSync(htmlFile, 'utf-8');
     roles = parseHtmlRoles(html);
     parsedFrom = 'html';
+
+    const markerCount = countHtmlRoleMarkers(html);
+    if (markerCount !== roles.length) {
+      console.warn(`⚠️  ${markerCount} role marker(s) ("🔗"/"🔒") found in the HTML but only ${roles.length} parsed — `
+        + `the newsletter template may have drifted from what parseHtmlRoles() expects. Sanity-check this issue before trusting it.`);
+    }
   }
 
   // ── Filter (reuse the portal scanner's filters) ─────────────────────
@@ -441,14 +531,14 @@ async function main() {
   if (!dryRun && added.length) {
     let pipe = readFileSync(PIPELINE_PATH, 'utf-8').replace(/\s*$/, '\n');
     pipe += `\n## InnovatorsRoom #${issueNo} (${date})\n\n`;
-    pipe += added.map(a => `- [ ] ${a.url} | ${a.company} | ${a.title}${a.location ? `  (${a.location})` : ''}`).join('\n') + '\n';
+    pipe += added.map(a => `- [ ] ${a.url} | ${tsvSafe(a.company)} | ${tsvSafe(a.title)}${a.location ? `  (${tsvSafe(a.location)})` : ''}`).join('\n') + '\n';
     writeFileSync(PIPELINE_PATH, pipe, 'utf-8');
 
     if (!existsSync(SCAN_HISTORY_PATH)) {
       writeFileSync(SCAN_HISTORY_PATH, 'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation\n', 'utf-8');
     }
     appendFileSync(SCAN_HISTORY_PATH,
-      added.map(a => `${a.url}\t${date}\tinnovatorsroom-${issueNo}\t${a.title}\t${a.company}\tadded\t${a.location}`).join('\n') + '\n',
+      added.map(a => `${a.url}\t${date}\tinnovatorsroom-${issueNo}\t${tsvSafe(a.title)}\t${tsvSafe(a.company)}\tadded\t${tsvSafe(a.location)}`).join('\n') + '\n',
       'utf-8');
   }
 
