@@ -2183,6 +2183,27 @@ job_boards:
     enabled: false
     notes: "Swiss VC portfolio board (Consider)"
 
+  # ── VCStack — VC/startup operator + investor roles ──────────────────
+  # Board-wide aggregator (not per-fund) of VC/startup "Investment" and
+  # "Operations" roles, auto-detected from the careers_url host — no extra
+  # config needed. Cards link straight through to the original posting
+  # (mostly johngannonblog.com / linkedin.com/jobs/view), not a vcstack
+  # redirect. Optional `max_pages` (100 jobs/page, default 20, hard cap 60).
+  #
+  # CAUTION: the board's relative "N days ago" label is its own indexing
+  # date, not the true posting date — several roles carrying a fresh-looking
+  # label have verified dead or months-old live. postedAt is never populated
+  # by this provider for exactly that reason; run a liveness check before
+  # trusting any listing from here is still open. Fork-local addition, not
+  # yet through the upstream Source Indexing Policy's operator-verification
+  # step (CONTRIBUTING.md rule 4).
+
+  - name: VCStack
+    careers_url: https://vcstack.com/job
+    provider: vcstack
+    enabled: false
+    notes: "VC/startup operator + investor roles, incl. Swiss roles (Backbone Ventures, redalpine, Snapbau, VU Venture Partners). Verify liveness before applying — see caution above."
+
   # ── Swiss startup job boards ───────────────────────────────────────
   # Aggregators of Swiss startup roles. No extra config — auto-detected from
   # the careers_url host.
