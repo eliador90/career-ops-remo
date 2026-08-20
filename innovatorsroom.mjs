@@ -57,6 +57,7 @@ import { pathToFileURL } from 'url';
 import * as yaml from 'js-yaml';
 import { buildTitleFilter, buildLocationFilter } from './scan.mjs';
 import { decodeEntities } from './providers/_html-entities.mjs';
+import { DEFAULT_USER_AGENT } from './user-agent.mjs';
 
 const PORTALS_PATH = process.env.CAREER_OPS_PORTALS || 'portals.yml';
 const PIPELINE_PATH = 'data/pipeline.md';
@@ -227,7 +228,12 @@ export function parseHtmlRoles(html) {
     }
 
     // Shapes A/B: linked card, anchored on the literal "🔗" apply-link marker.
-    if (t.type === 'link' && t.text.includes('🔗')) {
+    // Require an http(s) href, same gate parsePlaintextRoles() applies via
+    // isUrl() — an untrusted card's "🔗" anchor is otherwise free to carry any
+    // scheme (file://, etc.), which fetch() rejects but resolveTrackingUrl()
+    // then gracefully degrades by returning verbatim, letting it reach
+    // data/pipeline.md unresolved.
+    if (t.type === 'link' && t.text.includes('🔗') && isUrl(t.href)) {
       const applyUrl = t.href;
       const prev = tokens[i - 1];
       let company = '', title = '', location = '';
@@ -291,10 +297,46 @@ export async function resolveTrackingUrl(url) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 12000);
   try {
-    const r = await fetch(url, { redirect: 'follow', headers: { 'user-agent': 'Mozilla/5.0 (compatible; career-ops/1.0)' }, signal: ctrl.signal });
+    const r = await fetch(url, { redirect: 'follow', headers: { 'user-agent': DEFAULT_USER_AGENT }, signal: ctrl.signal });
     return stripTrackingParams(r.url || url);
   } catch { return url; }
   finally { clearTimeout(t); }
+}
+
+/**
+ * Resolve each keeper's tracking URL and do the final (post-resolution)
+ * dedup pass. The fetches themselves are independent — nothing about
+ * resolving one role's link depends on another's — so only two things need
+ * to stay list-ordered and sequential: the `roleKeys` pre-filter (skips a
+ * network call entirely for an already-known company::title) and the `urls`
+ * dedup (two DIFFERENT roles can resolve to the SAME final URL, and the
+ * first one in list order must win). Everything else runs concurrently via
+ * Promise.all. `seen` is mutated in place, matching loadSeen()'s contract.
+ *
+ * @param {{company: string, title: string, location: string, applyUrl: string}[]} filtered
+ * @param {{urls: Set<string>, roleKeys: Set<string>}} seen
+ * @returns {Promise<{added: object[], dupCount: number}>}
+ */
+export async function resolveAndDedupe(filtered, seen) {
+  let dupCount = 0;
+  const toResolve = [];
+  for (const r of filtered) {
+    const roleKey = `${r.company.toLowerCase()}::${r.title.toLowerCase()}`;
+    if (seen.roleKeys.has(roleKey)) { dupCount++; continue; }
+    toResolve.push({ r, roleKey });
+  }
+  const resolved = await Promise.all(
+    toResolve.map(async ({ r, roleKey }) => ({ r, roleKey, url: await resolveTrackingUrl(r.applyUrl) }))
+  );
+
+  const added = [];
+  for (const { r, roleKey, url } of resolved) {
+    if (seen.urls.has(url)) { dupCount++; continue; }
+    seen.urls.add(url);
+    seen.roleKeys.add(roleKey);
+    added.push({ ...r, url });
+  }
+  return { added, dupCount };
 }
 
 // ── Dedup against existing pipeline / history / applications ─────────
@@ -393,19 +435,7 @@ async function main() {
   }
 
   const seen = loadSeen();
-
-  // ── Resolve tracking URLs of keepers, then final dedup ──────────────
-  const added = [];
-  let dupCount = 0;
-  for (const r of filtered) {
-    const roleKey = `${r.company.toLowerCase()}::${r.title.toLowerCase()}`;
-    if (seen.roleKeys.has(roleKey)) { dupCount++; continue; }
-    const url = await resolveTrackingUrl(r.applyUrl);
-    if (seen.urls.has(url)) { dupCount++; continue; }
-    seen.urls.add(url);
-    seen.roleKeys.add(roleKey);
-    added.push({ ...r, url });
-  }
+  const { added, dupCount } = await resolveAndDedupe(filtered, seen);
 
   // ── Write to pipeline.md + scan-history.tsv ─────────────────────────
   if (!dryRun && added.length) {

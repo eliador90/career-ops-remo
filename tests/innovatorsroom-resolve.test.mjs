@@ -11,7 +11,7 @@ import { join } from 'path';
 import { pathToFileURL } from 'url';
 import { pass, fail, ROOT } from './helpers.mjs';
 
-const { resolveTrackingUrl, stripTrackingParams } =
+const { resolveTrackingUrl, stripTrackingParams, resolveAndDedupe } =
   await import(pathToFileURL(join(ROOT, 'innovatorsroom.mjs')).href);
 
 console.log('\ninnovatorsroom.mjs — tracking-URL resolution');
@@ -70,7 +70,69 @@ console.log('\ninnovatorsroom.mjs — tracking-URL resolution');
   }
 }
 
-// 3. A dead/unreachable host must degrade to the original URL rather than
+// 3. resolveAndDedupe() resolves every keeper's tracking URL concurrently
+// (Promise.all internally) rather than one at a time — but two DIFFERENT
+// roles that resolve to the SAME final URL must still be caught, with the
+// first one in list order winning, exactly like the sequential version this
+// replaced. This is the one behavior a naive Promise.all conversion could
+// have broken (out-of-order dedup bookkeeping), so it gets its own check.
+{
+  const server = createServer((req, res) => {
+    if (req.url.startsWith('/apply1') || req.url.startsWith('/apply2')) {
+      res.writeHead(302, { location: '/same-final-job' }); // both roles -> one posting
+      res.end();
+    } else {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('ok');
+    }
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  try {
+    const filtered = [
+      { company: 'CompanyA', title: 'Role One', location: 'Zurich', applyUrl: `${base}/apply1` },
+      { company: 'CompanyB', title: 'Role Two', location: 'Zurich', applyUrl: `${base}/apply2` },
+    ];
+    const seen = { urls: new Set(), roleKeys: new Set() };
+    const { added, dupCount } = await resolveAndDedupe(filtered, seen);
+    if (added.length === 1 && added[0].company === 'CompanyA' && dupCount === 1) {
+      pass('resolveAndDedupe() catches two different roles resolving to the same final URL, keeping the first in list order');
+    } else {
+      fail(`resolveAndDedupe() cross-role url-dedup broke: added=${JSON.stringify(added.map(a => a.company))}, dupCount=${dupCount}`);
+    }
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+}
+
+// 4. resolveAndDedupe() must skip the network call entirely for a role whose
+// company::title is already a known roleKey — not just skip adding it after
+// resolving. Point its applyUrl at a guaranteed-dead port; if the code tried
+// to resolve it anyway, resolveTrackingUrl's graceful-degrade would still
+// make this test pass, so the real assertion is a request COUNTER, not just
+// the output shape.
+{
+  let requestCount = 0;
+  const server = createServer((req, res) => { requestCount++; res.writeHead(200); res.end('ok'); });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  try {
+    const filtered = [{ company: 'KnownCo', title: 'Known Role', location: 'Zurich', applyUrl: `${base}/apply` }];
+    const seen = { urls: new Set(), roleKeys: new Set(['knownco::known role']) };
+    const { added, dupCount } = await resolveAndDedupe(filtered, seen);
+    if (added.length === 0 && dupCount === 1 && requestCount === 0) {
+      pass('resolveAndDedupe() skips the network call entirely for an already-known roleKey');
+    } else {
+      fail(`expected 0 added / dupCount 1 / 0 requests, got added=${added.length} dupCount=${dupCount} requests=${requestCount}`);
+    }
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+}
+
+// 5. A dead/unreachable host must degrade to the original URL rather than
 // throw — main() must keep going for the other roles in an issue even if one
 // tracking link is broken.
 {

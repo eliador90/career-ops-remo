@@ -60,6 +60,19 @@ const lockedWithUrl = locked.filter(r => r.applyUrl);
 if (lockedWithUrl.length === 0) pass('locked roles carry no applyUrl');
 else fail(`${lockedWithUrl.length} locked role(s) carry a bogus applyUrl: ${JSON.stringify(lockedWithUrl)}`);
 
+// 3b. A non-http(s) "🔗" href (e.g. file://) must be rejected outright, not
+// silently accepted and later degraded by resolveTrackingUrl()'s catch-and-
+// return-original fallback into an unresolved non-http(s) pipeline.md entry.
+const fileSchemeCard = `
+  <a href="https://elink9aa.innovatorsroom.com/e/cX">Shady Corp</a>
+  &nbsp;FT&nbsp;
+  <a href="https://elink9aa.innovatorsroom.com/e/tX">Suspicious Title</a>
+  &nbsp;<a href="file:///etc/passwd">🔗</a>
+`;
+const fileSchemeRoles = parseHtmlRoles(fileSchemeCard);
+if (fileSchemeRoles.length === 0) pass('a non-http(s) "🔗" href is rejected, not parsed as a role');
+else fail(`a file:// apply link was accepted: ${JSON.stringify(fileSchemeRoles)}`);
+
 // 4. Spot-check one locked role by title. A locked card never reveals a
 // company (real layout: "🔒" -> an "Upgrade" CTA link -> the title, still
 // shown -> location — no company slot at all), so `company` must be ''.
