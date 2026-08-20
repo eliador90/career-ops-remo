@@ -1,0 +1,220 @@
+<!doctype html>
+<!--
+  tests/fixtures/innovatorsroom-jobdrop.html
+
+  A structural fixture for the direct (non-forwarded) InnovatorsRoom JobDrop
+  HTML layout — verified against the real 2026-08-09 Senior Operator issue
+  (fetched via the Gmail MCP, token-by-token dumped, cross-checked against a
+  live `node innovatorsroom.mjs --dry-run` run). Company names, titles, and
+  URLs below are fabricated; only the markup SHAPE mirrors the real
+  newsletter, in its three card layouts:
+
+    Shape A — "top picks" preview (no "FT" badge at all):
+      <a company link>CompanyName</a> <flag-emoji location text>
+      <a>🔗</a> <a title link>Title</a>
+
+    Shape B — main listing, unlocked:
+      <a company link>CompanyName</a> FT <a title link>Title</a> <a>🔗</a>
+      <flag-emoji-prefixed location line>
+
+    Shape C — main listing, locked (no company ever revealed, no "FT"):
+      <b>🔒 <a>Upgrade</a></b> <a title link>Title</a>
+      <flag-emoji-prefixed location line>
+
+  Every hyperlink lives on elink9aa.innovatorsroom.com, never
+  link.mail.beehiiv.com — a beehiiv-domain grep finds nothing in a real
+  direct JobDrop and wrongly concludes the issue is fully paywalled.
+
+  19 roles total, matching the real issue's split: 3 shape A + 12 shape B
+  (15 with a free-tier "🔗" apply link) + 4 shape C (locked behind
+  "🔒 Upgrade"). Exactly one (Evotym, Chief Operating Officer, Fully Remote)
+  is built to pass tests/fixtures/innovatorsroom-portals.yml's title+location
+  filters — see tests/innovatorsroom-html-parse.test.mjs.
+-->
+<html lang="en">
+<head><meta charset="utf-8"><title>InnovatorsRoom — Senior Operator JobDrop</title></head>
+<body>
+<table role="presentation" width="100%">
+<tr><td>
+  <p>Hi Remo,</p>
+  <p>welcome to our <strong>Senior Operator newsletter</strong> focussing on all things related to
+  Founder, CEO, CPO, COO, Country Manager roles etc.</p>
+  <p>interested in our other <a href="https://elink9aa.innovatorsroom.com/e/prefs?utm_source=beehiiv&amp;i12m_id=pref001">jobdrop emails</a>
+  for investors, Product or Chief of Staff roles?</p>
+</td></tr>
+
+<tr><td><h2>⭐️ Recent top picks ⭐️</h2></td></tr>
+
+<!-- Shape A — Role 1 (top picks: company -> location -> 🔗 -> title, no FT) -->
+<tr><td>
+  <a href="https://elink9aa.innovatorsroom.com/e/c1?utm_source=beehiiv&amp;i12m_id=aaa001">Acme Robotics</a>
+  <span>🇩🇪 Berlin, Germany</span>
+  <a href="https://elink9aa.innovatorsroom.com/e/a1?utm_source=beehiiv&amp;i12m_id=ccc001">🔗</a>
+  <a href="https://elink9aa.innovatorsroom.com/e/t1?utm_source=beehiiv&amp;i12m_id=bbb001">Chief Executive Officer</a>
+  <span>Full-time</span>
+</td></tr>
+
+<!-- Shape A — Role 2 -->
+<tr><td>
+  <a href="https://elink9aa.innovatorsroom.com/e/c2?utm_source=beehiiv&amp;i12m_id=aaa002">Northwind Analytics</a>
+  <span>🇬🇧 London, UK</span>
+  <a href="https://elink9aa.innovatorsroom.com/e/a2?utm_source=beehiiv&amp;i12m_id=ccc002">🔗</a>
+  <a href="https://elink9aa.innovatorsroom.com/e/t2?utm_source=beehiiv&amp;i12m_id=bbb002">VP of Operations</a>
+  <span>Full-time</span>
+</td></tr>
+
+<!-- Shape A — Role 3 -->
+<tr><td>
+  <a href="https://elink9aa.innovatorsroom.com/e/c4?utm_source=beehiiv&amp;i12m_id=aaa004">BrightPath Health</a>
+  <span>🇺🇸 New York, US</span>
+  <a href="https://elink9aa.innovatorsroom.com/e/a4?utm_source=beehiiv&amp;i12m_id=ccc004">🔗</a>
+  <a href="https://elink9aa.innovatorsroom.com/e/t4?utm_source=beehiiv&amp;i12m_id=bbb004">Chief Financial Officer</a>
+  <span>Full-time</span>
+</td></tr>
+
+<tr><td><h2>10+ open roles</h2></td></tr>
+
+<!-- Shape B — the only role expected to pass title+location filters -->
+<tr><td>
+  <a href="https://elink9aa.innovatorsroom.com/e/c3?utm_source=beehiiv&amp;i12m_id=aaa003">Evotym</a>
+  &nbsp;FT&nbsp;
+  <a href="https://elink9aa.innovatorsroom.com/e/t3?utm_source=beehiiv&amp;i12m_id=bbb003">Chief Operating Officer</a>
+  &nbsp;<a href="https://elink9aa.innovatorsroom.com/e/a3?utm_source=beehiiv&amp;i12m_id=ccc003">🔗</a>
+</td></tr>
+<tr><td>🌍💻 Fully Remote</td></tr>
+
+<!-- Shape B — Role 5 -->
+<tr><td>
+  <a href="https://elink9aa.innovatorsroom.com/e/c5?utm_source=beehiiv&amp;i12m_id=aaa005">Solara Energy</a>
+  &nbsp;FT&nbsp;
+  <a href="https://elink9aa.innovatorsroom.com/e/t5?utm_source=beehiiv&amp;i12m_id=bbb005">Founder &amp; CEO</a>
+  &nbsp;<a href="https://elink9aa.innovatorsroom.com/e/a5?utm_source=beehiiv&amp;i12m_id=ccc005">🔗</a>
+</td></tr>
+<tr><td>🇫🇷💻 Paris, France</td></tr>
+
+<!-- Shape B — Role 6 -->
+<tr><td>
+  <a href="https://elink9aa.innovatorsroom.com/e/c6?utm_source=beehiiv&amp;i12m_id=aaa006">Kestrel Labs</a>
+  &nbsp;FT&nbsp;
+  <a href="https://elink9aa.innovatorsroom.com/e/t6?utm_source=beehiiv&amp;i12m_id=bbb006">Head of Growth</a>
+  &nbsp;<a href="https://elink9aa.innovatorsroom.com/e/a6?utm_source=beehiiv&amp;i12m_id=ccc006">🔗</a>
+</td></tr>
+<tr><td>🇪🇺💻 Remote (EU)</td></tr>
+
+<!-- Shape C — Role 7 — locked (no company, no FT: 🔒 -> Upgrade link -> title -> location) -->
+<tr><td>
+  <b>🔒 <a href="https://elink9aa.innovatorsroom.com/e/u7?utm_source=beehiiv&amp;i12m_id=upg007">Upgrade</a></b>
+  <a href="https://elink9aa.innovatorsroom.com/e/t7?utm_source=beehiiv&amp;i12m_id=bbb007">Chief of Staff</a>
+</td></tr>
+<tr><td>🇦🇪💻 Dubai, UAE</td></tr>
+
+<!-- Shape B — Role 8 -->
+<tr><td>
+  <a href="https://elink9aa.innovatorsroom.com/e/c8?utm_source=beehiiv&amp;i12m_id=aaa008">Vantage Bio</a>
+  &nbsp;FT&nbsp;
+  <a href="https://elink9aa.innovatorsroom.com/e/t8?utm_source=beehiiv&amp;i12m_id=bbb008">General Manager</a>
+  &nbsp;<a href="https://elink9aa.innovatorsroom.com/e/a8?utm_source=beehiiv&amp;i12m_id=ccc008">🔗</a>
+</td></tr>
+<tr><td>🇸🇬💻 Singapore</td></tr>
+
+<!-- Shape B — Role 9 -->
+<tr><td>
+  <a href="https://elink9aa.innovatorsroom.com/e/c9?utm_source=beehiiv&amp;i12m_id=aaa009">Circuit Systems</a>
+  &nbsp;FT&nbsp;
+  <a href="https://elink9aa.innovatorsroom.com/e/t9?utm_source=beehiiv&amp;i12m_id=bbb009">VP Engineering</a>
+  &nbsp;<a href="https://elink9aa.innovatorsroom.com/e/a9?utm_source=beehiiv&amp;i12m_id=ccc009">🔗</a>
+</td></tr>
+<tr><td>🇨🇦💻 Toronto, Canada</td></tr>
+
+<!-- Shape C — Role 10 — locked -->
+<tr><td>
+  <b>🔒 <a href="https://elink9aa.innovatorsroom.com/e/u10?utm_source=beehiiv&amp;i12m_id=upg010">Upgrade</a></b>
+  <a href="https://elink9aa.innovatorsroom.com/e/t10?utm_source=beehiiv&amp;i12m_id=bbb010">Investment Principal</a>
+</td></tr>
+<tr><td>🇨🇭💻 Zurich, Switzerland</td></tr>
+
+<!-- Shape B — Role 11 -->
+<tr><td>
+  <a href="https://elink9aa.innovatorsroom.com/e/c11?utm_source=beehiiv&amp;i12m_id=aaa011">Pulsewave Media</a>
+  &nbsp;FT&nbsp;
+  <a href="https://elink9aa.innovatorsroom.com/e/t11?utm_source=beehiiv&amp;i12m_id=bbb011">Country Manager</a>
+  &nbsp;<a href="https://elink9aa.innovatorsroom.com/e/a11?utm_source=beehiiv&amp;i12m_id=ccc011">🔗</a>
+</td></tr>
+<tr><td>🇳🇱💻 Amsterdam, Netherlands</td></tr>
+
+<!-- Shape B — Role 12 -->
+<tr><td>
+  <a href="https://elink9aa.innovatorsroom.com/e/c12?utm_source=beehiiv&amp;i12m_id=aaa012">Anchor Logistics</a>
+  &nbsp;FT&nbsp;
+  <a href="https://elink9aa.innovatorsroom.com/e/t12?utm_source=beehiiv&amp;i12m_id=bbb012">Regional Director</a>
+  &nbsp;<a href="https://elink9aa.innovatorsroom.com/e/a12?utm_source=beehiiv&amp;i12m_id=ccc012">🔗</a>
+</td></tr>
+<tr><td>🇬🇧💻 London, UK</td></tr>
+
+<!-- Shape C — Role 13 — locked -->
+<tr><td>
+  <b>🔒 <a href="https://elink9aa.innovatorsroom.com/e/u13?utm_source=beehiiv&amp;i12m_id=upg013">Upgrade</a></b>
+  <a href="https://elink9aa.innovatorsroom.com/e/t13?utm_source=beehiiv&amp;i12m_id=bbb013">Managing Director</a>
+</td></tr>
+<tr><td>🇩🇪💻 Berlin, Germany</td></tr>
+
+<!-- Shape B — Role 14 -->
+<tr><td>
+  <a href="https://elink9aa.innovatorsroom.com/e/c14?utm_source=beehiiv&amp;i12m_id=aaa014">Ridgeline Systems</a>
+  &nbsp;FT&nbsp;
+  <a href="https://elink9aa.innovatorsroom.com/e/t14?utm_source=beehiiv&amp;i12m_id=bbb014">Founding Engineer</a>
+  &nbsp;<a href="https://elink9aa.innovatorsroom.com/e/a14?utm_source=beehiiv&amp;i12m_id=ccc014">🔗</a>
+</td></tr>
+<tr><td>🇺🇸💻 Remote (US)</td></tr>
+
+<!-- Shape B — Role 15 -->
+<tr><td>
+  <a href="https://elink9aa.innovatorsroom.com/e/c15?utm_source=beehiiv&amp;i12m_id=aaa015">Comet Freight</a>
+  &nbsp;FT&nbsp;
+  <a href="https://elink9aa.innovatorsroom.com/e/t15?utm_source=beehiiv&amp;i12m_id=bbb015">Chief Revenue Officer</a>
+  &nbsp;<a href="https://elink9aa.innovatorsroom.com/e/a15?utm_source=beehiiv&amp;i12m_id=ccc015">🔗</a>
+</td></tr>
+<tr><td>🌍💻 Fully Remote</td></tr>
+
+<!-- Shape B — Role 16 -->
+<tr><td>
+  <a href="https://elink9aa.innovatorsroom.com/e/c16?utm_source=beehiiv&amp;i12m_id=aaa016">Fathom Insights</a>
+  &nbsp;FT&nbsp;
+  <a href="https://elink9aa.innovatorsroom.com/e/t16?utm_source=beehiiv&amp;i12m_id=bbb016">Senior Product Manager</a>
+  &nbsp;<a href="https://elink9aa.innovatorsroom.com/e/a16?utm_source=beehiiv&amp;i12m_id=ccc016">🔗</a>
+</td></tr>
+<tr><td>🇮🇳💻 Bengaluru, India</td></tr>
+
+<!-- Shape C — Role 17 — locked -->
+<tr><td>
+  <b>🔒 <a href="https://elink9aa.innovatorsroom.com/e/u17?utm_source=beehiiv&amp;i12m_id=upg017">Upgrade</a></b>
+  <a href="https://elink9aa.innovatorsroom.com/e/t17?utm_source=beehiiv&amp;i12m_id=bbb017">Investment Manager</a>
+</td></tr>
+<tr><td>🇦🇪💻 Dubai, UAE</td></tr>
+
+<!-- Shape B — Role 18 -->
+<tr><td>
+  <a href="https://elink9aa.innovatorsroom.com/e/c18?utm_source=beehiiv&amp;i12m_id=aaa018">Northstar Retail</a>
+  &nbsp;FT&nbsp;
+  <a href="https://elink9aa.innovatorsroom.com/e/t18?utm_source=beehiiv&amp;i12m_id=bbb018">Chief Product Officer</a>
+  &nbsp;<a href="https://elink9aa.innovatorsroom.com/e/a18?utm_source=beehiiv&amp;i12m_id=ccc018">🔗</a>
+</td></tr>
+<tr><td>🇸🇬💻 Singapore</td></tr>
+
+<!-- Shape B — Role 19 -->
+<tr><td>
+  <a href="https://elink9aa.innovatorsroom.com/e/c19?utm_source=beehiiv&amp;i12m_id=aaa019">Vertex Mining</a>
+  &nbsp;FT&nbsp;
+  <a href="https://elink9aa.innovatorsroom.com/e/t19?utm_source=beehiiv&amp;i12m_id=bbb019">Chief Marketing Officer</a>
+  &nbsp;<a href="https://elink9aa.innovatorsroom.com/e/a19?utm_source=beehiiv&amp;i12m_id=ccc019">🔗</a>
+</td></tr>
+<tr><td>🇨🇦💻 Toronto, Canada</td></tr>
+
+<tr><td>
+  <p>Upgrade now to see even more jobs 🚀</p>
+  <p>Support us and get full access to this post and our other subscriber-only content.</p>
+  <p><a href="https://elink9aa.innovatorsroom.com/e/upgrade?utm_source=beehiiv&amp;i12m_id=upg001">Upgrade</a></p>
+</td></tr>
+</table>
+</body>
+</html>
