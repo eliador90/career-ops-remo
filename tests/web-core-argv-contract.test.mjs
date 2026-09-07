@@ -14,7 +14,7 @@
 // real script.
 import { pass, fail, ROOT, NODE, rmSync, walkFiles } from './helpers.mjs';
 import { spawnSync } from 'child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, relative, sep } from 'path';
 
@@ -153,36 +153,44 @@ try {
   // web route — or a whole new route that spawns a script — cannot land
   // without going through a probe.
 
-  // Every `"--flag"` literal in a listed source must appear in its argv here.
-  // This covers the argv literals the routes write inline; it does NOT cover a
-  // flag assembled at runtime from a variable or a template string.
-  const flagDrift = [];
-  for (const site of CALL_SITES) {
-    const src = readFileSync(join(ROOT, site.source), 'utf-8');
-    const literals = [...new Set([...src.matchAll(/"(--[a-z][a-z0-9-]*)"/g)].map((m) => m[1]))];
-    for (const flag of literals) {
-      if (!site.args.includes(flag)) flagDrift.push(`${site.source} passes ${flag}, which no probe above covers`);
+  // web/ is optional in a checkout: the updater ships the core scripts without
+  // it. The probes above only need the scripts, so they run either way; these
+  // two checks read web/src/** and cannot. Sibling suites (web-test-layout,
+  // profile-keywords-parity) skip the same way rather than fail.
+  if (!existsSync(join(ROOT, 'web', 'src'))) {
+    pass('web/ is not present in this checkout — the source-drift checks are not applicable');
+  } else {
+    // Every `"--flag"` literal in a listed source must appear in its argv here.
+    // This covers the argv literals the routes write inline; it does NOT cover a
+    // flag assembled at runtime from a variable or a template string.
+    const flagDrift = [];
+    for (const site of CALL_SITES) {
+      const src = readFileSync(join(ROOT, site.source), 'utf-8');
+      const literals = [...new Set([...src.matchAll(/"(--[a-z][a-z0-9-]*)"/g)].map((m) => m[1]))];
+      for (const flag of literals) {
+        if (!site.args.includes(flag)) flagDrift.push(`${site.source} passes ${flag}, which no probe above covers`);
+      }
     }
+    if (flagDrift.length === 0) pass('every --flag literal in the listed web sources is covered by a probe');
+    else for (const d of flagDrift) fail(d);
+
+    // Every web source that spawns a core script must be listed. A new route is
+    // a new argv nobody has put to the script.
+    const spawners = walkFiles(join(ROOT, 'web', 'src'), /\.(ts|tsx|mjs)$/)
+      .map((f) => relative(ROOT, f).split(sep).join('/'))
+      .filter((rel) => {
+        const src = readFileSync(join(ROOT, rel), 'utf-8');
+        return /\brootScript\(/.test(src) && /\b(execFile|spawn)\(/.test(src);
+      });
+    const listed = new Set(CALL_SITES.map((s) => s.source));
+    const unlisted = spawners.filter((f) => !listed.has(f));
+    if (unlisted.length === 0) pass(`all ${spawners.length} web sources that spawn a core script are listed here`);
+    else fail(`web sources spawning a core script with no argv probe: ${unlisted.join(', ')}`);
+
+    const stale = [...listed].filter((f) => !spawners.includes(f));
+    if (stale.length === 0) pass('no stale entries — every listed source still spawns a core script');
+    else fail(`listed sources that no longer spawn a core script: ${stale.join(', ')}`);
   }
-  if (flagDrift.length === 0) pass('every --flag literal in the listed web sources is covered by a probe');
-  else for (const d of flagDrift) fail(d);
-
-  // Every web source that spawns a core script must be listed. A new route is
-  // a new argv nobody has put to the script.
-  const spawners = walkFiles(join(ROOT, 'web', 'src'), /\.(ts|tsx|mjs)$/)
-    .map((f) => relative(ROOT, f).split(sep).join('/'))
-    .filter((rel) => {
-      const src = readFileSync(join(ROOT, rel), 'utf-8');
-      return /\brootScript\(/.test(src) && /\b(execFile|spawn)\(/.test(src);
-    });
-  const listed = new Set(CALL_SITES.map((s) => s.source));
-  const unlisted = spawners.filter((f) => !listed.has(f));
-  if (unlisted.length === 0) pass(`all ${spawners.length} web sources that spawn a core script are listed here`);
-  else fail(`web sources spawning a core script with no argv probe: ${unlisted.join(', ')}`);
-
-  const stale = [...listed].filter((f) => !spawners.includes(f));
-  if (stale.length === 0) pass('no stale entries — every listed source still spawns a core script');
-  else fail(`listed sources that no longer spawn a core script: ${stale.join(', ')}`);
 } finally {
   rmSync(sandbox, { recursive: true, force: true });
 }

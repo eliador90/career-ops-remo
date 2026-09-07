@@ -237,3 +237,16 @@ follow-ups.md
 *.db
 *.db-wal
 *.db-shm
+
+# Re-ignore backups inside templates/. The !templates/*example* re-allow above
+# is broader than intended: it also un-ignores templates/portals.example.yml.bak,
+# defeating the *.bak* rule. Backups never belong in a public fork.
+templates/*.bak*
+
+# Re-assert the upgrade fixtures LAST. git applies the final matching pattern,
+# so this negation only works below every rule that could catch a fixture by
+# name. The copy at the top of this file was left stranded above the
+# updater-appended `applications.md` / `follow-ups.md` rules, which silently
+# un-tracked test-fixtures/upgrade/*/data/. Upstream orders it the same way.
+# Anything appended after this line must re-assert it again.
+!test-fixtures/**

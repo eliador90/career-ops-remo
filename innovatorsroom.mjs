@@ -53,7 +53,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, appendFileSync } from 'fs';
-import { pathToFileURL } from 'url';
+import { isMainModule } from './lib/is-main-module.mjs';
 import * as yaml from 'js-yaml';
 import { buildTitleFilter, buildLocationFilter } from './scan.mjs';
 import { decodeEntities } from './providers/_html-entities.mjs';
@@ -559,7 +559,7 @@ async function main() {
 }
 
 // --- Run (CLI only; guarded so the module is safely importable for tests) ---
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (isMainModule(import.meta.url)) {
   main().catch((err) => {
     console.error(`innovatorsroom: ${err?.stack || err?.message || err}`);
     process.exit(1);
