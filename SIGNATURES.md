@@ -142,3 +142,21 @@ public commit with a stated reason.
 - @gunjanjaswal | Gunjan Jaswal | 2026-08-21 | id:400143 | src:https://github.com/santifer/career-ops/discussions/3151 | n:94
 - @miguel-fg | Miguel Fierro | 2026-08-21 | "one shouldn't need to apply hundreds of times to get one interview" | id:72409412 | src:https://github.com/santifer/career-ops/discussions/3187 | n:95
 - @elefino | 2026-08-22 | "This is a good thing. I'm going to boost this signal." | id:319961379 | src:https://github.com/santifer/career-ops/discussions/3206 | n:96
+- @chorrell | Christopher Horrell | 2026-08-24 | id:2781 | src:https://github.com/santifer/career-ops/discussions/3275 | n:97
+- @qoodboop | qoodboop | 2026-08-25 | "really good we can focus on something else than doomscrolling hiring contracts" | id:23255979 | src:https://github.com/santifer/career-ops/discussions/3313 | n:98
+- @Nardohsu | 2026-08-25 | "Let's get into the AI world!" | id:25312922 | src:https://github.com/santifer/career-ops/discussions/3336 | n:99
+- @prateeksingh1092 | 2026-08-26 | "A non-bloat, grounded in truth, a true example of leveraging AI as a human counterpart." | id:269049851 | src:https://github.com/santifer/career-ops/discussions/3389 | n:100
+- @nourischw | Nouris Wong | 2026-08-28 | "if you can't beat them join them" | id:8112770 | src:https://github.com/santifer/career-ops/discussions/3490 | n:101
+- @akhil451 | akhil | 2026-08-29 | "akhil451" | id:16731293 | src:https://github.com/santifer/career-ops/discussions/3512 | n:102
+- @jaishankarsurya | 2026-08-31 | "Let’s hope this works" | id:58153836 | src:https://github.com/santifer/career-ops/discussions/3555 | n:103
+- @fabdull1 | 2026-09-02 | "No time to waste" | id:250269279 | src:https://github.com/career-ops-hq/career-ops/discussions/3630 | n:104
+- @zyxc2024 | 2026-09-02 | id:194247172 | src:https://github.com/career-ops-hq/career-ops/discussions/3625 | n:105
+- @9jaswag | Chuks Opia | 2026-09-02 | id:8125356 | src:https://github.com/career-ops-hq/career-ops/discussions/3663 | n:106
+- @violetsea555 | violet | 2026-08-08 | "If a system rejects you, you have the right to know it was a system." | id:88992496 | src:https://github.com/career-ops-hq/career-ops/pull/2634 | n:107
+- @PKDT-93 | Peter Tran | 2026-09-02 | "A first step to landing on my feet after being laid off" | id:75346912 | src:https://github.com/career-ops-hq/career-ops/discussions/3694 | n:108
+- @brianmgray | Brian Gray | 2026-09-03 | "People-first" | id:638937 | src:https://github.com/career-ops-hq/career-ops/discussions/3730 | n:109
+- @ivan1velasquez | ivan1velasquezzz | 2026-09-03 | "La definición de IA como herramienta" | id:147756951 | src:https://github.com/career-ops-hq/career-ops/discussions/3746 | n:110
+- @nessuarez | Nestor Suarez Alfonso | 2026-09-03 | "My career now belongs to me." | id:1491974 | src:https://github.com/career-ops-hq/career-ops/discussions/3777 | n:111
+- @digerati9 | 2026-09-04 | id:19416174 | src:https://github.com/career-ops-hq/career-ops/discussions/3806 | n:112
+- @mortee | 2026-09-04 | id:338540 | src:https://github.com/career-ops-hq/career-ops/discussions/3827 | n:113
+- @adityap | Aditya Poddar | 2026-09-07 | id:7117191 | src:https://github.com/career-ops-hq/career-ops/discussions/3970 | n:114

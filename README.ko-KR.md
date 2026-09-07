@@ -38,6 +38,8 @@
 
 <p align="center"><strong>740개 이상의 채용 공고 평가 · 100개 이상의 맞춤형 이력서 생성 · 꿈의 직장 1곳 합격</strong></p>
 
+<p align="center"><sub><a href="https://santifer.io">Santiago Fernández de Valderrama Aparicio</a>(<a href="https://github.com/santifer">@santifer</a>)가 만들고 유지 관리합니다</sub></p>
+
 <p align="center"><a href="https://discord.gg/8pRpHETxa4"><img src="https://img.shields.io/badge/커뮤니티_참여하기-Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
   &nbsp;
   <a href="https://www.npmjs.com/package/@santifer/career-ops"><img src="https://img.shields.io/npm/dt/@santifer/career-ops?style=for-the-badge&logo=npm&color=CB3837&label=npx%20installs" alt="npm installs"></a></p>
@@ -67,7 +69,7 @@
 
 career-ops는 AI 코딩 CLI를 취업 활동 전체를 관리하는 커맨드 센터로 바꿔줍니다. 스프레드시트에서 수동으로 지원 현황을 관리하는 대신, AI 파이프라인이 알아서 처리합니다:
 
-- **공고 평가** -- 구조화된 A-F 평가 (다섯 개 항목이 1.0-5.0점으로 산출됨)
+- **공고 평가** -- 구조화된 A-H 평가 (다섯 개 항목이 1-5점으로 산출됨)
 - **맞춤형 PDF 생성** -- JD별로 최적화된 ATS 이력서
 - **포털 자동 스캔** -- Greenhouse, Ashby, Lever, 기업 채용 페이지
 - **일괄 처리** -- 서브 에이전트로 10개 이상의 공고를 병렬 평가
@@ -121,7 +123,7 @@ claude   # or gemini / codex / qwen / opencode — open your AI CLI here
 <summary><b>수동으로 설정하고 싶으신가요? (git clone)</b></summary>
 
 ```bash
-git clone https://github.com/santifer/career-ops.git
+git clone https://github.com/career-ops-hq/career-ops.git
 cd career-ops && npm install
 npx playwright install chromium   # only needed for PDF generation
 claude   # open your AI CLI — it onboards you on first launch
@@ -165,7 +167,7 @@ career-ops는 다양한 모드를 가진 하나의 슬래시 커맨드입니다:
 └──────────┬─────────────┘
            │
 ┌──────────▼─────────────┐
-│  A-F 평가               │  이력서 기반 매칭도 및 갭 분석, 연봉 리서치, STAR 스토리
+│  A-H 평가               │  이력서 기반 매칭도 및 갭 분석, 연봉 리서치, STAR 스토리
 │  (cv.md 참조)           │
 └──────────┬─────────────┘
            │
@@ -261,9 +263,9 @@ Santiago입니다 -- Head of Applied AI, 전직 창업자 (직접 사업을 만�
 
 <a href="https://www.star-history.com/?repos=santifer%2Fcareer-ops&type=timeline&legend=top-left">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=santifer/career-ops&type=timeline&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=santifer/career-ops&type=timeline&legend=top-left" />
-   <img alt="Star History 차트" src="https://api.star-history.com/chart?repos=santifer/career-ops&type=timeline&legend=top-left" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=career-ops-hq/career-ops&type=timeline&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=career-ops-hq/career-ops&type=timeline&legend=top-left" />
+   <img alt="Star History 차트" src="https://api.star-history.com/chart?repos=career-ops-hq/career-ops&type=timeline&legend=top-left" />
  </picture>
 </a>
 
