@@ -34,6 +34,7 @@
 // check catches immediately and loudly.
 import { BROWSER_LIKE_USER_AGENT } from '../user-agent.mjs';
 import { decodeEntities } from './_html-entities.mjs';
+import { sleep } from './_http.mjs';
 
 const HOME_URL = 'https://www.startup.ch/';
 const LIST_URL = 'https://www.startup.ch/jobs';
@@ -54,14 +55,6 @@ const cleanText = (s) => decodeEntities(String(s || '')).trim();
 
 // startup.ch's robots.txt sets `Crawl-delay: 10` for `User-agent: *`.
 const CRAWL_DELAY_MS = 10_000;
-
-// Prefer the shared pacing hook when scan.mjs supplies one (same contract the
-// paginating providers use, documented on Context.sleep in _types.js); fall
-// back to a plain timer so this still works when called with a bare ctx.
-function pace(ctx, ms) {
-  if (typeof ctx?.sleep === 'function') return ctx.sleep(ms);
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 async function fetchWithTimeout(url, headers, timeoutMs = 12000) {
   const controller = new AbortController();
@@ -116,7 +109,7 @@ export default {
     // requests ignored that; honour it between the two hops we actually make.
     // Only wait if the first request went out, so a failed prime does not add
     // a pointless 10s to every scan.
-    if (primed) await pace(ctx, CRAWL_DELAY_MS);
+    if (primed) await sleep(CRAWL_DELAY_MS, ctx);
 
     const res = await fetchWithTimeout(LIST_URL, { ...BROWSER_HEADERS, ...(cookie ? { cookie } : {}) });
     const html = await res.text();

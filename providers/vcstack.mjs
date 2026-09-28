@@ -83,7 +83,7 @@
 // fork-local addition. Verify operator provenance before proposing it upstream.
 
 import { decodeEntities } from './_html-entities.mjs';
-import { fetchTextWithRetry } from './_http.mjs';
+import { fetchTextWithRetry, sleep } from './_http.mjs';
 
 const ORIGIN = 'https://www.vcstack.com';
 const LIST_PATH = '/job';
@@ -122,12 +122,6 @@ function assertVcstackUrl(url) {
     throw new Error(`vcstack: untrusted hostname "${parsed.hostname}" — must be ${TRUSTED_HOST}`);
   }
   return url;
-}
-
-/** Awaitable sleep that honours a ctx-supplied clock, so tests never wall-clock wait. */
-function sleep(ms, ctx) {
-  if (typeof ctx?.sleep === 'function') return ctx.sleep(ms);
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Strip tags then decode entities (house order — remotli.mjs / avature.mjs). */

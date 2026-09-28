@@ -78,7 +78,6 @@ plugins.lock
 
 # Generated
 .resolved-prompt-*
-node_modules/
 bun.lock
 # Report-number reservation sentinels (ephemeral, created by reserve-report-num.mjs)
 reports/*-RESERVED.md
@@ -168,6 +167,31 @@ templates/*
 !templates/README.md
 !templates/benchmarks.yml
 !templates/states.yml
+# Upstream system templates matching none of the patterns above. Named one by
+# one so the subdirectories stay fail-closed for anything else.
+!templates/agency-licensing.yml
+!templates/immigration-status-requirements.yml
+!templates/jurisdiction-ai-screening-disclosure.yml
+!templates/jurisdiction-prohibited-content.yml
+!templates/protected-grounds.yml
+!templates/restrictive-covenants.yml
+!templates/sections/
+templates/sections/*
+!templates/sections/awards.html
+!templates/sections/certifications.html
+!templates/sections/competencies.html
+!templates/sections/education.html
+!templates/sections/experience.html
+!templates/sections/projects.html
+!templates/sections/skills.html
+!templates/ats/
+templates/ats/*
+!templates/ats/cv-template.ats.html
+!templates/ats/sections/
+templates/ats/sections/*
+!templates/ats/sections/competencies.html
+!templates/ats/sections/education.html
+!templates/ats/sections/experience.html
 
 # Added by career-ops update-system.mjs.
 # System-owned ignore rules that were missing from this file. Your own rules

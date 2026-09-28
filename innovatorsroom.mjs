@@ -58,6 +58,7 @@ import * as yaml from 'js-yaml';
 import { buildTitleFilter, buildLocationFilter } from './scan.mjs';
 import { decodeEntities } from './providers/_html-entities.mjs';
 import { DEFAULT_USER_AGENT } from './user-agent.mjs';
+import { tsvSafe } from './lib/tracker-addition.mjs';
 
 const PORTALS_PATH = process.env.CAREER_OPS_PORTALS || 'portals.yml';
 const PIPELINE_PATH = 'data/pipeline.md';
@@ -80,8 +81,9 @@ const cleanUrl = (l) => (l || '').replace(/^<|>$/g, '').trim();
 // collapses runs of 2+ whitespace, so a single embedded tab survives it
 // untouched, and neither parser strips "|" at all. Applied to every field
 // this script interpolates into data/pipeline.md's `url | company | title`
-// line or data/scan-history.tsv's tab-separated columns.
-const tsvSafe = (s) => (s || '').replace(/[\t\r\n|]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+// line or data/scan-history.tsv's tab-separated columns. The shared tsvSafe()
+// handles tabs/newlines; "|" is stripped on top of it for the pipeline.md line.
+const fieldSafe = (s) => tsvSafe(s).replace(/\|/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
 // ── Plaintext parser (forwarded "TechJobs" issues) ───────────────────
 
@@ -531,14 +533,14 @@ async function main() {
   if (!dryRun && added.length) {
     let pipe = readFileSync(PIPELINE_PATH, 'utf-8').replace(/\s*$/, '\n');
     pipe += `\n## InnovatorsRoom #${issueNo} (${date})\n\n`;
-    pipe += added.map(a => `- [ ] ${a.url} | ${tsvSafe(a.company)} | ${tsvSafe(a.title)}${a.location ? `  (${tsvSafe(a.location)})` : ''}`).join('\n') + '\n';
+    pipe += added.map(a => `- [ ] ${a.url} | ${fieldSafe(a.company)} | ${fieldSafe(a.title)}${a.location ? `  (${fieldSafe(a.location)})` : ''}`).join('\n') + '\n';
     writeFileSync(PIPELINE_PATH, pipe, 'utf-8');
 
     if (!existsSync(SCAN_HISTORY_PATH)) {
       writeFileSync(SCAN_HISTORY_PATH, 'url\tfirst_seen\tportal\ttitle\tcompany\tstatus\tlocation\n', 'utf-8');
     }
     appendFileSync(SCAN_HISTORY_PATH,
-      added.map(a => `${a.url}\t${date}\tinnovatorsroom-${issueNo}\t${tsvSafe(a.title)}\t${tsvSafe(a.company)}\tadded\t${tsvSafe(a.location)}`).join('\n') + '\n',
+      added.map(a => `${a.url}\t${date}\tinnovatorsroom-${issueNo}\t${fieldSafe(a.title)}\t${fieldSafe(a.company)}\tadded\t${fieldSafe(a.location)}`).join('\n') + '\n',
       'utf-8');
   }
 
