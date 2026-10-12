@@ -20,6 +20,7 @@ import { isMainModule } from './lib/is-main-module.mjs';
 import { load as yamlLoad } from 'js-yaml';
 import { resolveColumns, parseTrackerRow, normalizeVia } from './tracker-parse.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
+import { atsVendorOf } from './ats-vendor.mjs';
 import { flagValue, hasFlag, validateFlags } from './lib/cli-flags.mjs';
 import { localToday } from './lib/local-today.mjs';
 
@@ -41,6 +42,11 @@ const MACHINE_SUMMARY_FIELDS = new Set([
   'top_strengths',
   'risk_level',
   'confidence',
+  // Evidence states and unresolved checks behind the existing confidence tier.
+  // Preserved for report consumers; historical outcome analysis does not use
+  // them to change the Global Score or calibration rates.
+  'score_evidence',
+  'confidence_gaps',
   'next_action',
   // Optional context fields accepted for future reports.
   'domain',
@@ -50,6 +56,9 @@ const MACHINE_SUMMARY_FIELDS = new Set([
   // Issue 1380: predicted skip/discard reasons from the agent.
   'discard_reasons',
   'advertised_comp',
+  // JD-stated work location used by salary-gap's informational relocation
+  // comparison. Preserved for report consumers; pattern scoring ignores it.
+  'posting_location',
   'via',
   'company_confidential',
   'risk_summary',
@@ -257,6 +266,17 @@ export function scoreThresholdFrom(positiveScoresRaw, negativeScoresRaw) {
   };
 }
 
+// Vendor outcome analysis intentionally stays on the five URL-fingerprintable
+// community ATS families it has always reported. The shared detector knows
+// more providers for scan routing, but those do not widen this analysis.
+const VENDOR_ANALYSIS_SCOPE = Object.freeze(['greenhouse', 'lever', 'ashby', 'workday', 'icims']);
+
+/** Keep vendor analysis inside its declared taxonomy, not arbitrary hosts. */
+export function knownAtsVendorOf(rawUrl) {
+  const vendor = atsVendorOf(rawUrl);
+  return VENDOR_ANALYSIS_SCOPE.includes(vendor) ? vendor : null;
+}
+
 // Statuses that count as a submitted application for channel-yield analysis.
 // 'evaluated' was never sent, 'skip' is self-filtered, and 'discarded' (withdrawn
 // or the posting closed) proves neither a submission nor an answer — the same
@@ -286,7 +306,7 @@ function normalizeScalar(value) {
   return null;
 }
 
-function parseMachineSummary(content) {
+export function parseMachineSummary(content) {
   const fenceMatch = content.match(/##\s*Machine Summary\s*\n+```(?:yaml|yml|json)?\s*\n([\s\S]*?)\n```/i);
   if (!fenceMatch) return null;
 
@@ -421,6 +441,7 @@ risk_level: "Medium"
 confidence: "High"
 next_action: "Follow up on ticket #42 with tailored CV"
 work_auth: "unstated"
+posting_location: "Halifax, NS"
 via: "Hays"
 company_confidential: true
 \`\`\`
@@ -435,6 +456,7 @@ company_confidential: true
   if (summary?.via !== 'Hays') failures.push('via was not preserved from Machine Summary');
   if (summary?.company_confidential !== true) failures.push('company_confidential boolean was not preserved from Machine Summary');
   if (summary?.work_auth !== 'unstated') failures.push('work_auth field was not preserved from Machine Summary');
+  if (summary?.posting_location !== 'Halifax, NS') failures.push('posting_location field was not preserved from Machine Summary');
 
   // Backward compat (#1737): summaries without risk_summary parse as before, key simply absent.
   if ('risk_summary' in (summary ?? {})) failures.push('summary without risk_summary must not gain the key');
@@ -524,14 +546,15 @@ requirement_importance:
     ['https://jobs.ashbyhq.com/acme/uuid', 'ashby'],
     ['https://acme.wd1.myworkdayjobs.com/en-US/careers/job/R-1', 'workday'],
     ['https://careers.icims.com/jobs/9/x', 'icims'],
-    ['https://jobs.dayforcehcm.com/en-US/co/CANDIDATEPORTAL/jobs/1', null],
+    ['https://jobs.dayforcehcm.com/en-US/co/CANDIDATEPORTAL/jobs/1', 'dayforce'],
+    ['https://careers.example.com/jobs/1', 'careers.example.com'],
     ['not a url', null],
     ['', null],
     [null, null],
   ];
   for (const [url, expected] of vendorCases) {
-    const got = detectVendor(url);
-    if (got !== expected) failures.push(`detectVendor(${JSON.stringify(url)}) → ${JSON.stringify(got)}, expected ${JSON.stringify(expected)}`);
+    const got = atsVendorOf(url);
+    if (got !== expected) failures.push(`atsVendorOf(${JSON.stringify(url)}) → ${JSON.stringify(got)}, expected ${JSON.stringify(expected)}`);
   }
 
   // Report header fields survive the locale they were written in. French output
@@ -1097,28 +1120,6 @@ function classifyRemote(raw) {
 // (which needs the full posting path to build an API URL) — a tracker report's
 // URL may point at a board/careers page, not a canonical posting.
 //
-// SCOPE (intentional): only ATS with clean, public URL fingerprints — Greenhouse,
-// Lever, Ashby, Workday, iCIMS. White-labeled ATS (UKG, Dayforce, and similar) are
-// NOT detectable from the URL alone and are deferred until the community adds a
-// reliable signal (e.g. confirmation-email domain). Undetected → 'unknown'.
-const VENDOR_HOST_PATTERNS = [
-  { id: 'greenhouse', test: (h) => /(^|\.)greenhouse\.io$/.test(h) },
-  { id: 'lever',      test: (h) => h === 'jobs.lever.co' || h.endsWith('.lever.co') },
-  { id: 'ashby',      test: (h) => h === 'jobs.ashbyhq.com' || h.endsWith('.ashbyhq.com') },
-  { id: 'workday',    test: (h) => h.endsWith('.myworkdayjobs.com') || h.endsWith('.myworkdaysite.com') },
-  { id: 'icims',      test: (h) => h.endsWith('.icims.com') },
-];
-
-function detectVendor(rawUrl) {
-  if (!rawUrl || typeof rawUrl !== 'string') return null;
-  let u;
-  try { u = new URL(rawUrl.trim()); } catch { return null; }
-  if (u.protocol !== 'https:' && u.protocol !== 'http:') return null;
-  const host = u.hostname.toLowerCase();
-  for (const v of VENDOR_HOST_PATTERNS) if (v.test(host)) return v.id;
-  return null;
-}
-
 // --- Classify company size ---
 function classifyCompanySize(teamSize) {
   if (!teamSize) return 'unknown';
@@ -1156,15 +1157,46 @@ function recordedDiscardReasons(entry) {
     .filter(Boolean));
 }
 
+// The vocabulary ships with the code, not with the user's data, so it resolves
+// from this file's directory rather than CAREER_OPS_ROOT.
+const DISCARD_REASONS_FILE = join(dirname(fileURLToPath(import.meta.url)), 'templates/discard-reasons.yml');
+
+/**
+ * Canonical discard-reason ids from templates/discard-reasons.yml (#2785).
+ * Returns null when the file is missing, malformed, or lists no id; callers
+ * then report every label as `other` instead of inventing a vocabulary.
+ */
+export function loadDiscardReasonVocabulary(file = DISCARD_REASONS_FILE) {
+  try {
+    const parsed = yamlLoad(readFileSync(file, 'utf8'));
+    const reasons = Array.isArray(parsed?.reasons) ? parsed.reasons : [];
+    const ids = reasons.map(reason => reason?.id).filter(id => typeof id === 'string' && id);
+    return ids.length > 0 ? new Set(ids) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Spelling only: case, surrounding whitespace, and space/hyphen vs underscore.
+// Synonyms are never guessed; an unmatched label stays `other`.
+function discardReasonKey(label) {
+  return label.trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
 /**
  * Forecasts stay separate from recorded outcomes (#2785). The base is tracker
  * entries whose linked report explicitly supplies prediction data, including
  * an empty list; a missing or malformed field is unknown, not an empty forecast.
  * All statuses remain eligible: advancing later does not erase a prediction.
- * Labels stay open-ended; only case and surrounding whitespace are normalized.
+ * Only canonical ids from templates/discard-reasons.yml enter the shares. Every
+ * other label is listed under `predictedDiscardReasonOther` with its own
+ * spelling (case and surrounding whitespace normalized) and is never counted
+ * in `predictedDiscardReasonStats`.
  */
-export function buildPredictedDiscardReasonSignals(enriched) {
+export function buildPredictedDiscardReasonSignals(enriched, vocabulary = loadDiscardReasonVocabulary()) {
   const counts = new Map();
+  const otherCounts = new Map();
+  let entriesWithOther = 0;
   const coverage = {
     entriesWithReports: 0,
     entriesWithPredictionData: 0,
@@ -1189,13 +1221,33 @@ export function buildPredictedDiscardReasonSignals(enriched) {
     const reasons = new Set((entry.report.discardReasons || [])
       .map(reason => reason.trim().toLowerCase()).filter(Boolean));
     if (reasons.size > 0) coverage.entriesWithPredictions++;
-    for (const reason of reasons) counts.set(reason, (counts.get(reason) || 0) + 1);
+    const canonical = new Set();
+    const other = new Set();
+    for (const reason of reasons) {
+      const key = discardReasonKey(reason);
+      if (vocabulary?.has(key)) canonical.add(key);
+      else other.add(reason);
+    }
+    for (const reason of canonical) counts.set(reason, (counts.get(reason) || 0) + 1);
+    for (const reason of other) otherCounts.set(reason, (otherCounts.get(reason) || 0) + 1);
+    if (other.size > 0) entriesWithOther++;
   }
   const base = coverage.entriesWithPredictionData;
+  const byFrequency = (a, b) => b.frequency - a.frequency || a.reason.localeCompare(b.reason);
   return {
     predictedDiscardReasonStats: [...counts.entries()]
       .map(([reason, frequency]) => ({ reason, frequency, percentage: Math.round(frequency / base * 100) }))
-      .sort((a, b) => b.frequency - a.frequency || a.reason.localeCompare(b.reason)),
+      .sort(byFrequency),
+    // Reported beside the shares, never inside them. A growing `entries` share
+    // is the signal that the vocabulary needs a new member.
+    predictedDiscardReasonOther: {
+      vocabularyLoaded: vocabulary !== null,
+      entries: entriesWithOther,
+      percentage: base ? Math.round(entriesWithOther / base * 100) : 0,
+      reasons: [...otherCounts.entries()]
+        .map(([reason, frequency]) => ({ reason, frequency }))
+        .sort(byFrequency),
+    },
     predictedDiscardReasonBase: base,
     discardReasonCoverage: coverage,
   };
@@ -1327,7 +1379,7 @@ export function analyze(entries = parseTracker()) {
       report: reportData,
       remoteBucket: classifyRemote(remoteSource),
       companySize: classifyCompanySize(teamSource),
-      vendor: detectVendor(reportData?.url),
+      vendor: knownAtsVendorOf(reportData?.url),
     };
   });
 
@@ -1435,7 +1487,7 @@ export function analyze(entries = parseTracker()) {
 
   const identifiedCount = submitted.length - (vendorMap.get('unknown')?.total || 0);
   const vendorAnalysis = {
-    scope: ['greenhouse', 'lever', 'ashby', 'workday', 'icims'],
+    scope: [...VENDOR_ANALYSIS_SCOPE],
     minSampleForClaim: MIN_VENDOR_N,
     submitted: submitted.length,
     identified: identifiedCount,
@@ -1660,14 +1712,24 @@ function printSummary(result) {
   console.log(`  Prediction data: ${coverage.entriesWithPredictionData}/${coverage.entriesWithReports} entries with linked reports; ${coverage.entriesWithPredictions} contain reasons.`);
   console.log(`  Recorded reasons: ${coverage.entriesWithRecordedReasons}/${result.discardReasonBase} eligible entries; ${coverage.entriesWithBothSources} entries have both sources.`);
   console.log('  Forecasts cover all statuses; recorded reasons cover skipped, discarded, and rejected entries.');
-  console.log('  Predictions are not outcomes. Missing data is unknown; labels are grouped by spelling, not meaning.');
+  console.log('  Predictions are not outcomes. Missing data is unknown; canonical ids are matched by spelling, not meaning.');
+  const other = result.predictedDiscardReasonOther;
+  if (!other.vocabularyLoaded) {
+    console.log('  templates/discard-reasons.yml could not be read; every predicted reason is listed as other.');
+  }
   if (result.predictedDiscardReasonBase === 0) {
     console.log('  No prediction data recorded yet.');
-  } else if (result.predictedDiscardReasonStats.length === 0) {
+  } else if (result.predictedDiscardReasonStats.length === 0 && other.reasons.length === 0) {
     console.log('  No reasons predicted in the recorded data.');
   } else {
     for (const d of result.predictedDiscardReasonStats.slice(0, 10)) {
       console.log(`  ${d.reason.padEnd(30)} ${String(d.frequency).padStart(2)}x (${d.percentage}%)`);
+    }
+    if (other.entries > 0) {
+      console.log(`  other (outside the vocabulary, not counted above): ${other.entries} entries (${other.percentage}%)`);
+      for (const d of other.reasons.slice(0, 10)) {
+        console.log(`    ${d.reason.padEnd(28)} ${String(d.frequency).padStart(2)}x`);
+      }
     }
   }
 

@@ -5,10 +5,10 @@
  * Checks all prerequisites and prints a pass/fail checklist.
  */
 
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
+import { constants, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { homedir } from 'os';
-import { join, dirname } from 'path';
+import { join, dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import * as yaml from 'js-yaml';
 import dotenv from 'dotenv';
@@ -19,6 +19,8 @@ import { resolveExtractorMode } from './browser-extract.mjs';
 import { parseConfigByExtension } from './jsonc-parse.mjs';
 import { validateFlags } from './lib/cli-flags.mjs';
 import { geminiNodeFloor } from './lib/gemini-node-floor.mjs';
+import { nodeFloor } from './lib/node-floor.mjs';
+import { findExperienceSections, parseCompanyHeading, EXPERIENCE_HEADING_NAMES } from './lib/cv-markdown.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -31,14 +33,15 @@ const VALID_CLIS = ['claude', 'codex', 'opencode', 'pi', 'antigravity', 'grok', 
 // silently diagnosed THIS checkout instead of the one asked for. Handled via
 // lib/cli-flags.mjs's validateFlags() (#2775), which rejects unrecognized
 // flags before --help so `--help --bogus` still errors.
-const KNOWN_FLAGS = ['--target', '--json', '--strict', '--cli', '--help', '-h'];
+const KNOWN_FLAGS = ['--target', '--json', '--init-templates', '--strict', '--cli', '--help', '-h'];
 
 // Both take their value as the next argv token.
 const VALUE_FLAGS = ['--target', '--cli'];
 
 const USAGE = `Usage:
   node doctor.mjs                    # run the setup diagnostic
-  node doctor.mjs --json             # machine-readable onboarding state
+  node doctor.mjs --json             # read-only machine-readable onboarding state
+  node doctor.mjs --json --init-templates # create missing personalization files for onboarding
   node doctor.mjs --strict           # also probe portals.yml entries (network)
   node doctor.mjs --target <path>    # diagnose another career-ops checkout
   node doctor.mjs --cli <name>       # check a specific CLI's integration
@@ -66,6 +69,11 @@ const projectRoot = explicitTarget || getCareerOpsRoot();
 // tests/doctor-tracked-bak-files.test.mjs already exercises it.
 const codeRoot = explicitTarget || __dirname;
 const JSON_OUT = argv.includes('--json');
+const INIT_TEMPLATES = argv.includes('--init-templates');
+if (INIT_TEMPLATES && !JSON_OUT) {
+  console.error('Error: --init-templates requires --json');
+  process.exit(1);
+}
 // --strict adds a live reachability probe of every portals.yml entry (network).
 // Opt-in so the default `npm run doctor` stays fast and fully offline.
 const STRICT = argv.includes('--strict');
@@ -81,30 +89,7 @@ const yellow = (s) => isTTY ? `\x1b[33m${s}\x1b[0m` : s;
 const dim = (s) => isTTY ? `\x1b[2m${s}\x1b[0m` : s;
 
 function checkNodeVersion() {
-  const versionStr = process.versions.node;
-  const [major, minor] = versionStr.split('.').map(Number);
-  const hasSqlite = major > 22 || (major === 22 && minor >= 5);
-
-  if (hasSqlite) {
-    return { pass: true, label: `Node.js >= 22.5 (v${versionStr})` };
-  }
-
-  if (major >= 18) {
-    return {
-      warn: true,
-      label: `Node.js v${versionStr} detected. Node >= 22.5.0 is highly recommended because tracker.mjs (SQLite database indexing) requires node:sqlite.`,
-      fix: [
-        'Upgrade Node.js to v22.5.0 or later to enable full tracker database support.',
-        'The markdown tracker keeps working without it — the index is optional.',
-      ],
-    };
-  }
-
-  return {
-    pass: false,
-    label: `Node.js >= 18 (found v${versionStr})`,
-    fix: 'Install Node.js 22.5.0 or later from https://nodejs.org',
-  };
+  return nodeFloor(process.versions.node);
 }
 
 // El check mas frecuente de la comunidad, medido: 8 personas en 4 semanas
@@ -153,13 +138,48 @@ function checkBillingSource() {
   };
 }
 
+// Whether each package.json dependency resolves from the code checkout the way
+// Node will at run time — not whether a node_modules directory exists. That
+// was wrong both ways: a git worktree with no node_modules of its own resolves
+// through the main checkout's (Node walks up parent directories), and a
+// node_modules installed before a dependency was added (undici, #4445) still
+// exists while the import fails. Every script loads its dependencies with ESM
+// `import`, whose bare-specifier lookup is node_modules in the code root and
+// each ancestor directory — and nothing else: unlike require(), it ignores
+// NODE_PATH and the global folders, so a package found only there would pass
+// here and still fail to import. A package counts as installed when one of
+// those node_modules holds it. Checking for its package.json, rather than
+// resolving the package, never consults an `exports` map that refuses the
+// lookup and never loads the package — doctor runs on every session's first
+// message.
+function findMissingDependencies(root) {
+  const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf-8'));
+  const lookupDirs = [];
+  for (let dir = resolve(root); ; dir = dirname(dir)) {
+    lookupDirs.push(join(dir, 'node_modules'));
+    if (dirname(dir) === dir) break;
+  }
+  return Object.keys(manifest.dependencies || {}).filter((name) =>
+    !lookupDirs.some((dir) => existsSync(join(dir, name, 'package.json'))));
+}
+
 function checkDependencies() {
-  if (existsSync(join(codeRoot, 'node_modules'))) {
+  let missing;
+  try {
+    missing = findMissingDependencies(codeRoot);
+  } catch (err) {
+    return {
+      pass: false,
+      label: `Dependencies could not be checked: package.json unreadable (${err.message})`,
+      fix: 'Run doctor from a career-ops checkout, or pass --target <checkout>',
+    };
+  }
+  if (missing.length === 0) {
     return { pass: true, label: 'Dependencies installed' };
   }
   return {
     pass: false,
-    label: 'Dependencies not installed',
+    label: `Dependencies missing: ${missing.join(', ')}`,
     fix: 'Run: npm install',
   };
 }
@@ -253,8 +273,8 @@ async function checkPlaywright() {
 }
 
 // Per-CLI MCP config registry. `plugins: true` marks a CLI whose MCP servers
-// can also arrive from an installed plugin, i.e. from outside the project root
-// (see isPlaywrightMcpFromPlugin).
+// can also arrive from outside the project root: from .claude.json or from an
+// installed plugin (see isPlaywrightMcpFromClaudeJson, isPlaywrightMcpFromPlugin).
 const MCP_CONFIGS = [
   { cli: 'claude',   files: ['.mcp.json', '.claude/settings.json', '.claude/settings.local.json'], plugins: true },
   // opencode.jsonc is JSONC: OpenCode accepts comments and trailing commas
@@ -343,6 +363,28 @@ function isPlaywrightMcpFromPlugin(root) {
   });
 }
 
+// `claude mcp add` writes to .claude.json, not to any file in the checkout
+// (#4392): user scope under the top-level `mcpServers`, local scope (the
+// default) under `projects[<dir>].mcpServers`. The file lives in
+// CLAUDE_CONFIG_DIR when that is set, otherwise directly in the home dir -
+// beside ~/.claude/, not inside it.
+//
+// Claude Code on Windows can store one directory under both C:\... and C:/...
+// with the server under only one of them, while process.cwd() returns the
+// backslash form. So keys are compared with slashes and case folded, and every
+// matching key counts, not just the first.
+function isPlaywrightMcpFromClaudeJson(root) {
+  const dir = process.env.CLAUDE_CONFIG_DIR || homedir();
+  const cfg = readConfigIfPresent(join(dir, '.claude.json'));
+  if (!cfg || typeof cfg !== 'object') return false;
+  if (hasPlaywrightIn(cfg)) return true;
+  if (!root || !cfg.projects || typeof cfg.projects !== 'object') return false;
+  const norm = (p) => p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const target = norm(root);
+  return Object.entries(cfg.projects)
+    .some(([key, project]) => norm(key) === target && hasPlaywrightIn(project));
+}
+
 function isPlaywrightMcpConfigured(root, activeCli) {
   const entry = MCP_CONFIGS.find((c) => c.cli === activeCli);
   if (!entry) return false; // known CLI but no MCP file mapping; caller warns
@@ -353,7 +395,8 @@ function isPlaywrightMcpConfigured(root, activeCli) {
   if (inProject) return true;
   // Gated behind the project scan, so an already-configured project pays no
   // extra I/O and non-plugin CLIs never touch the user config dir.
-  return entry.plugins === true && isPlaywrightMcpFromPlugin(root);
+  return entry.plugins === true
+    && (isPlaywrightMcpFromClaudeJson(root) || isPlaywrightMcpFromPlugin(root));
 }
 
 // CLI resolution: --cli flag > $CAREER_OPS_CLI > .env (CAREER_OPS_CLI=...) >
@@ -411,7 +454,7 @@ function checkPlaywrightMcp(root, activeCli) {
     label: `Playwright MCP tools not detected (active CLI: ${activeCli})`,
     fix: [
       entry.plugins
-        ? `No project-level MCP config, and no enabled plugin providing one, was detected for ${activeCli}.`
+        ? `No project-level MCP config, no server in .claude.json (~/.claude.json, or $CLAUDE_CONFIG_DIR/.claude.json when set), and no enabled plugin providing one, was detected for ${activeCli}.`
         : `No project-level MCP config was detected for ${activeCli}.`,
       activeCli === 'opencode'
         ? 'Add the Playwright MCP server to opencode.json (see opencode.example.json) or pass --cli <name> if you actually run a different CLI.'
@@ -661,6 +704,41 @@ function checkPlugins(root) {
 // WARN, never FAIL, like the plugin check below it: an unknown key is a typo,
 // not a broken install, and refusing to run would be a worse answer than naming
 // it.
+// cv.md exists but in a shape the CV checks cannot read (#4879). The prereq
+// check only proves the file is there; cv-title-check.mjs and
+// verify-cv-structure.mjs locate jobs through lib/cv-markdown.mjs, and a cv.md
+// whose Experience section they cannot find makes both run against nothing.
+// They do say so per run, but only once a tailored CV is already being built;
+// this says it at setup time. A warning, never a failure: cv.md is the user's
+// file and career-ops still works with it.
+function checkCvShape(root) {
+  const cvPath = join(root, 'cv.md');
+  if (!existsSync(cvPath)) return null;   // the prereq check owns "absent"
+  let text;
+  try {
+    text = readFileSync(cvPath, 'utf-8');
+  } catch (err) {
+    return { warn: true, label: `cv.md could not be read (${err.message})` };
+  }
+  const sections = findExperienceSections(text);
+  // Same entry rule verify-cv-structure.mjs parses with, so a stray
+  // "### Notes" under Experience is not counted as a job.
+  const entries = sections.flat().filter((line) => parseCompanyHeading(line) !== null).length;
+  if (entries > 0) {
+    return { pass: true, label: `cv.md: Experience section recognized (${entries} entr${entries === 1 ? 'y' : 'ies'})` };
+  }
+  return {
+    warn: true,
+    label: sections.length === 0
+      ? 'cv.md: no Experience section the CV checks recognize — title and structure checks will not run'
+      : 'cv.md: Experience section has no "### Company — Location" entries — title and structure checks will not run',
+    fix: [
+      `Name the section ${EXPERIENCE_HEADING_NAMES.map((n) => `"## ${n}"`).join(', ')}`,
+      'Start each job with "### Company — Location", then a bold **Title** line, then a dates line (see examples/cv-example.md)',
+    ],
+  };
+}
+
 function checkProfileShape(root) {
   const profilePath = process.env.CAREER_OPS_PROFILE || join(root, 'config', 'profile.yml');
   if (!existsSync(profilePath)) return null;   // the prereq check owns "absent"
@@ -701,6 +779,7 @@ async function main() {
     checkFonts(),
     checkPersonalization(projectRoot),
     checkProfileShape(projectRoot),
+    checkCvShape(projectRoot),
     checkAutoDir('data'),
     checkPipelineFile(),
     checkAutoDir('output'),
@@ -762,8 +841,8 @@ async function main() {
 //     into every A-F evaluation, so offers are scored against a stranger.
 //   _brief.md unedited hands the triage first pass literal `{placeholders}`
 //     instead of the candidate's archetypes, comp floor and hard DQ criteria.
-// doctor auto-copies both from their templates on first run, so "the file
-// exists" is guaranteed and tells us nothing — only its CONTENT does.
+// Explicit onboarding copies both from their templates, so existence alone
+// tells us nothing about personalization — only the CONTENT does.
 const PERSONALIZATION_FILES = [
   {
     path: 'modes/_profile.md',
@@ -790,7 +869,8 @@ function unpersonalizedFiles(root) {
   const out = [];
   for (const { path, template, impact } of PERSONALIZATION_FILES) {
     const targetPath = join(root, ...path.split('/'));
-    const templatePath = join(root, ...template.split('/'));
+    const rootTemplatePath = join(root, ...template.split('/'));
+    const templatePath = existsSync(rootTemplatePath) ? rootTemplatePath : join(__dirname, ...template.split('/'));
     if (!existsSync(targetPath) || !existsSync(templatePath)) continue;
     let target, tpl;
     try {
@@ -844,9 +924,11 @@ function onboardingState(root) {
     const targetPath = join(root, ...target.split('/'));
     const rootTemplatePath = join(root, ...template.split('/'));
     const templatePath = existsSync(rootTemplatePath) ? rootTemplatePath : join(__dirname, ...template.split('/'));
-    if (!existsSync(targetPath) && existsSync(templatePath)) {
+    // Diagnosis must not create user files. Copy only during explicit onboarding.
+    if (INIT_TEMPLATES && !existsSync(targetPath) && existsSync(templatePath)) {
       try {
-        copyFileSync(templatePath, targetPath);
+        mkdirSync(dirname(targetPath), { recursive: true });
+        copyFileSync(templatePath, targetPath, constants.COPYFILE_EXCL);
         autoCopied.push(target);
       } catch {
         // Gracefully handle read-only filesystems (e.g., CI/CD or containerized environments)
@@ -870,10 +952,12 @@ function onboardingState(root) {
   // codeRoot (the code checkout), which only differs from `root` when a real
   // split-checkout data root is in play and no --target was given.
   const bakCheck = checkTrackedBakFiles(codeRoot);
+  const cvShape = checkCvShape(root);
   const warnings = [
     ...(cliWarning ? [cliWarning] : []),
     ...(mcpCheck?.warn ? [`${mcpCheck.label}\n→ ${[].concat(mcpCheck.fix || []).join('\n  ')}`] : []),
     ...(bakCheck.warn ? [`${bakCheck.label}\n→ ${[].concat(bakCheck.fix || []).join('\n  ')}`] : []),
+    ...(cvShape?.warn ? [`${cvShape.label}\n→ ${[].concat(cvShape.fix || []).join('\n  ')}`] : []),
     ...unpersonalized.map((u) => `${u.path} ${u.reason} — ${u.impact}\n→ Personalize it from cv.md before running evaluations.`),
   ];
 

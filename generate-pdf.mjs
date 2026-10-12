@@ -48,14 +48,19 @@ import { randomUUID } from 'node:crypto';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 import { readStyleTokens, injectThemeStyle, readCvSectionOrder } from './theme-style.mjs';
 import { validateCvExperienceOrder } from './cv-experience-order.mjs';
-import { resolvePdfIndexPath, resolveTrackerPath, resolveWorkspaceRoot } from './tracker-utils.mjs';
+import { resolvePdfIndexPath, resolveTrackerPath, resolveWorkspaceRootFor } from './tracker-utils.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { stripEmptyRenderedSections } from './cv-sections-core.mjs';
 import { PAGE_CSS_SIZE, PAGE_FORMATS, normalizePageFormat, resolvePageFormat } from './lib/page-format.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const trackerPath = resolveTrackerPath(getCareerOpsRoot());
-const workspaceRoot = resolveWorkspaceRoot(trackerPath);
+// Derive the workspace root from the uncanonicalized tracker path (#3169): a
+// repo that symlinks only its data/ out (the #524 workaround) must still resolve
+// cv.md, config/ and output/ inside the repo, not follow data/ to the symlink
+// target. resolveWorkspaceRootFor canonicalizes the derived root itself, so the
+// spelling the rest of the module compares against stays canonical as before.
+const workspaceRoot = resolveWorkspaceRootFor(getCareerOpsRoot());
 const PDF_PAGE_MARGIN = '0.6in';
 
 // Canonical tracker workspace: realpath so a symlinked ancestor (e.g. macOS
@@ -89,7 +94,10 @@ function refreshRootCache() {
   // derived the workspace from the CODE directory, so every path under the
   // real data root read as an escape and the PDF was refused (#4389). Line 49
   // already used getCareerOpsRoot(), so the two disagreed inside one module.
-  const root = resolveWorkspaceRoot(resolveTrackerPath(getCareerOpsRoot()));
+  //
+  // Same #3169 derivation as the import-time const: resolveWorkspaceRootFor works
+  // from the uncanonicalized tracker so a symlinked data/ stays in the repo.
+  const root = resolveWorkspaceRootFor(getCareerOpsRoot());
   if (__rootCache.key !== root) {
     __rootCache = { key: root, root, canonical: realpathSync(root) };
   }
@@ -170,7 +178,29 @@ mkdirSync(resolve(workspaceRoot, 'output'), { recursive: true });
  *
  * Only touches body text — preserves CSS, JS, tag attributes, and URLs.
  * Returns { html, replacements } so the caller can log what was changed.
+ *
+ * In body text it also keeps each hyphenated word on one line (#4908).
+ * Chromium may break a line after a hard hyphen, and no CSS turns that off,
+ * so "go-to-market" lands in the PDF text layer as "go-" and "to-market" on
+ * separate lines: some extractors join the halves without the hyphen, others
+ * keep the line break, and either way the term an ATS matches on is gone. A
+ * white-space:nowrap span changes the line breaking only, never the text.
+ * The span covers the whole whitespace-delimited run ("30-40%", "$1-2M"), so
+ * its edges sit where the text already breaks: the fact gate turns tags into
+ * spaces, and a span around "30-40" alone would read as "40 %". CJK text has
+ * no spaces, so a run there is a whole clause: only the hyphenated Latin word
+ * inside it is wrapped, and CJK characters, which may break anywhere, never
+ * count as part of one.
  */
+const WORD_CHAR = String.raw`[[\p{L}\p{N}]--[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Hangul}]]`;
+const HYPHENATED_WORD_SOURCE = String.raw`(?<![${WORD_CHAR}\-])${WORD_CHAR}+(?:-${WORD_CHAR}+)+(?![${WORD_CHAR}\-])`;
+const HYPHENATED_WORD = new RegExp(HYPHENATED_WORD_SOURCE, 'v');
+const HYPHENATED_WORDS = new RegExp(HYPHENATED_WORD_SOURCE, 'gv');
+const CJK = /[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Hangul}]/u;
+// Longer runs (an identifier, a pasted slug) stay breakable rather than risk
+// overflowing a narrow column.
+const HYPHENATED_RUN_MAX = 40;
+
 function normalizeTextForATS(html) {
   const replacements = {};
   const bump = (key, n) => { replacements[key] = (replacements[key] || 0) + n; };
@@ -185,15 +215,35 @@ function normalizeTextForATS(html) {
     }
   );
 
+  // The nowrap span is markup, so it must not land where text is plain
+  // (<title>, <textarea>, <option>, the raw-text elements) or foreign
+  // (<svg>, <math>).
+  let plainUntil = null;
+  const text = (t) => (plainUntil ? sanitizeText(t) : keepHyphenatedWordsWhole(sanitizeText(t)));
+  // A real tag ends at the first `>` outside a quoted attribute value, so a
+  // `title="a > b"` is not split into a tag and a run of "text". A quote
+  // opens a value only right after `=` (`title=don't` is unquoted), and
+  // comments and declarations are matched whole first. Each alternative
+  // starts differently, so a tag left open never backtracks.
+  const TAG = /<!--[\s\S]*?-->|<![^>]*>|<\/?[A-Za-z](?:[^>=]|=\s*"[^"]*"|=\s*'[^']*'|=(?!\s*["']))*>/y;
   let out = '';
   let i = 0;
   while (i < masked.length) {
     const lt = masked.indexOf('<', i);
-    if (lt === -1) { out += sanitizeText(masked.slice(i)); break; }
-    out += sanitizeText(masked.slice(i, lt));
-    const gt = masked.indexOf('>', lt);
+    if (lt === -1) { out += text(masked.slice(i)); break; }
+    out += text(masked.slice(i, lt));
+    TAG.lastIndex = lt;
+    const gt = TAG.test(masked) ? TAG.lastIndex - 1 : masked.indexOf('>', lt);
     if (gt === -1) { out += masked.slice(lt); break; }
-    out += masked.slice(lt, gt + 1);
+    const tag = masked.slice(lt, gt + 1);
+    const name = /^<\/?([A-Za-z][\w:-]*)/.exec(tag)?.[1].toLowerCase();
+    // An <option> holds only text and its end tag is optional, so any tag
+    // after it closes it.
+    if (plainUntil && (plainUntil === 'option' || (tag[1] === '/' && name === plainUntil))) plainUntil = null;
+    if (!plainUntil && tag[1] !== '/' && !tag.endsWith('/>') && /^(?:title|textarea|option|svg|math|xmp|plaintext|noembed|noframes|iframe|noscript)$/.test(name || '')) {
+      plainUntil = name;
+    }
+    out += tag;
     i = gt + 1;
   }
 
@@ -230,6 +280,21 @@ function normalizeTextForATS(html) {
       return `<strong>${inner}</strong>`;
     });
     return t;
+  }
+
+  function keepHyphenatedWordsWhole(text) {
+    if (!text || !text.includes('-')) return text;
+    const wrap = (s) => {
+      bump('hyphen-nowrap', 1);
+      return `<span style="white-space:nowrap">${s}</span>`;
+    };
+    // sanitizeText may have inserted <strong> markup, and a masked <script> or
+    // <style> is a placeholder token; only wrap the text runs between them.
+    return text.split(/(<[^>]*>|\u0000MASK\d+\u0000)/).map((part, n) => (n % 2 ? part : part.replace(/\S+/g, (run) => {
+      if (!HYPHENATED_WORD.test(run)) return run;
+      if (CJK.test(run)) return run.replace(HYPHENATED_WORDS, (w) => (w.length > HYPHENATED_RUN_MAX ? w : wrap(w)));
+      return run.length > HYPHENATED_RUN_MAX ? run : wrap(run);
+    }))).join('');
   }
 }
 
@@ -1576,7 +1641,7 @@ async function generatePDF() {
     // fixtures also ship no cv.md, so this branch is never entered there. If the
     // module is genuinely missing in a real workspace this throws and the render
     // fails, which is the correct direction to fail for a fact gate.
-    const { assertFacts } = await import('./verify-cv-facts.mjs');
+    const { assertFacts, printAdvisoryFacts } = await import('./verify-cv-facts.mjs');
     const factCheck = assertFacts(html, { label: basename(inputPath) });
     // Ahead of the verdict, because it qualifies it: with no config the phrase
     // lists are empty, so a "passed" below covers metrics and facts only.
@@ -1586,6 +1651,7 @@ async function generatePDF() {
     if (factCheck.verdict === 'warn') {
       console.warn(`⚠️  CV fact check warning: ${basename(inputPath)}`);
       for (const phrase of factCheck.warnings) console.warn(`  - advisory phrase: ${phrase}`);
+      printAdvisoryFacts(factCheck.advisoryFacts, console.warn);
     } else {
       console.log('✅ Fact check passed');
     }
