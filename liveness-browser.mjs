@@ -27,6 +27,18 @@ const HYDRATING_CODES = new Set(['insufficient_content', 'no_apply_control']);
 // while such a frame is present.
 const FRAME_CONTENT_TIMEOUT_MS = 6_000;
 const FRAME_CONTENT_POLL_MS = 500;
+// A failed navigation is not over when page.goto rejects: Chromium commits its
+// error page (chrome-error://chromewebdata/) just after, 1-69 ms later over 36
+// failed loads (a host with no address, four kinds of TLS failure). Playwright
+// reports a goto that is still waiting when that commit lands as "interrupted
+// by another navigation" (microsoft/playwright#35944), and Chromium goes on
+// loading the URL that goto asked for, whose late commit then interrupts the
+// goto after it. On the one page that check-liveness and scan --verify share,
+// one such failure turned the checks after it into navigation_errors. So a
+// check whose navigation failed waits for that commit before it returns, up to
+// this long. A goto that timed out has nothing to wait for: no error page
+// commits, and the next goto cancels it.
+const FAILED_NAVIGATION_COMMIT_MS = 2_000;
 
 // BambooHR's client bundle can throw during first paint — a failed
 // /globals/locale request followed by an uncaught TypeError reading
@@ -95,6 +107,33 @@ export function jitteredDelayMs(baseMs) {
   return baseMs + Math.floor(Math.random() * baseMs);
 }
 
+// Per-host spacing for a browser batch. A WAF rate limit is per site, so a run
+// across many sites only needs to space out repeat visits to the SAME host
+// (exact hostname, `www.` ignored; careers.x.com and jobs.x.com count as two):
+// the gap since that host's last browser check ended counts toward its
+// jittered delay, and a host seen for the first time waits nothing. With a global gap, 641 URLs
+// over ~40 hosts cost 5-10 s each (~1.5 h); per host, only same-site runs wait.
+const hostKey = (url) => {
+  try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ''); } catch { return String(url); }
+};
+
+export function createHostSpacer(baseMs, { now = Date.now, delay = jitteredDelayMs } = {}) {
+  const lastVisit = new Map();
+  return {
+    /** Milliseconds to wait before a browser check of `url`. */
+    waitBefore(url) {
+      if (!baseMs || baseMs <= 0) return 0;
+      const last = lastVisit.get(hostKey(url));
+      if (last == null) return 0;
+      return Math.max(0, delay(baseMs) - (now() - last));
+    },
+    /** Record that `url`'s host was just visited by the browser. */
+    visited(url) {
+      lastVisit.set(hostKey(url), now());
+    },
+  };
+}
+
 // Defensive guards: URLs come from ATS feeds (mostly trusted) but a misconfigured
 // portals.yml entry or a hijacked feed shouldn't be able to point Playwright at
 // internal infrastructure. Only allow http(s) and reject loopback/private/link-local.
@@ -111,6 +150,9 @@ export function jitteredDelayMs(baseMs) {
 //      also be matched against the IPv4 block list.
 // `0.0.0.0` and the all-zeros IPv6 `::` both reach loopback on Linux and need
 // explicit entries; the original list omitted them.
+//
+// IPv6 ULA is fc00::/7 (RFC 4193): both fc00::/8 and fd00::/8. IPv6
+// link-local is fe80::/10 (RFC 4291): fe80–febf, not only the fe80: prefix.
 const PRIVATE_HOST_PATTERNS = [
   /^localhost$/,
   /^localhost\.localdomain$/,
@@ -122,8 +164,8 @@ const PRIVATE_HOST_PATTERNS = [
   /^169\.254\./,
   /^::1$/,
   /^::$/,
-  /^fc[0-9a-f]{2}:/,
-  /^fe80:/,
+  /^f[cd][0-9a-f]{2}:/,
+  /^fe[89ab][0-9a-f]:/,
 ];
 
 // Lowercase, strip IPv6 brackets, strip FQDN trailing dot. The `hostname`
@@ -181,6 +223,10 @@ export function rejectPrivateOrInvalid(url) {
 }
 
 const dnsCache = new Map();
+// Hold failures for 30 s, the same TTL as providers/_dns-cache.mjs, so an outage
+// is not pinned for the whole process. Unlike that cache, this includes NXDOMAIN:
+// resolveViaDns turns all lookup failures into an empty answer.
+const DNS_NEGATIVE_TTL_MS = 30_000;
 
 // Real DNS: resolve4 + resolve6 + lookup, each tolerant of its own failure, so a
 // host that only answers on one of the three still yields an address list.
@@ -229,8 +275,9 @@ export function setHostResolver(resolver) {
 async function resolveDnsCached(hostname) {
   if (dnsCache.has(hostname)) {
     const cached = dnsCache.get(hostname);
-    if (cached instanceof Error) throw cached;
-    return cached;
+    if (Array.isArray(cached)) return cached;
+    if (Date.now() < cached.expiresAt) throw cached.error;
+    dnsCache.delete(hostname);
   }
   try {
     const addresses = await hostResolver(hostname);
@@ -246,10 +293,20 @@ async function resolveDnsCached(hostname) {
     dnsCache.set(hostname, addresses);
     return addresses;
   } catch (err) {
-    dnsCache.set(hostname, err);
+    if (!Array.isArray(dnsCache.get(hostname))) {
+      dnsCache.set(hostname, { error: err, expiresAt: Date.now() + DNS_NEGATIVE_TTL_MS });
+    }
     throw err;
   }
 }
+
+// What a DNS filter answers for a name it blocks: 0.0.0.0 and ::. That is
+// Pi-hole's default, and what AdGuard DNS and Control D answered for the
+// trackers they blocked on 2026-10-11; hosts-file blocklists map names to
+// 0.0.0.0 too. No site is published at either address, so an answer whose only
+// private addresses are these is the user's own filter at work, not a host
+// resolving into private space. The request is blocked all the same.
+const SINKHOLE_ADDRESSES = new Set(['0.0.0.0', '::']);
 
 // Second layer of the egress guard: `rejectPrivateOrInvalid` only sees the
 // literal host, so a public hostname that *resolves* to private space still
@@ -261,20 +318,34 @@ export async function validateUrlSecurity(urlString) {
   const hostname = url.hostname;
   const host = normalizeHost(hostname);
   const addresses = await resolveDnsCached(host);
+  // Every private address, not only the first: whether a DNS filter gave the
+  // answer depends on all of them.
+  const blocked = [];
   for (const ip of addresses) {
     const norm = normalizeHost(ip);
     const mapped = extractMappedIPv4(norm);
     const candidates = mapped ? [norm, mapped] : [norm];
-    for (const candidate of candidates) {
-      if (PRIVATE_HOST_PATTERNS.some((pattern) => pattern.test(candidate))) {
-        throw new Error(`Access denied: Egress guard blocked private target IP ${ip}`);
-      }
-    }
+    const hit = candidates.find((candidate) => PRIVATE_HOST_PATTERNS.some((pattern) => pattern.test(candidate)));
+    if (hit) blocked.push({ ip, hit });
+  }
+  if (blocked.length > 0) {
+    const denied = new Error(`Access denied: Egress guard blocked private target IP ${blocked[0].ip}`);
+    if (blocked.every(({ hit }) => SINKHOLE_ADDRESSES.has(hit))) denied.livenessCode = 'dns_sinkhole';
+    throw denied;
   }
 }
 
 // Rediscovery can navigate a newly created page before its first liveness
 // check. Install the same URL/DNS guards before that search as well.
+let suppressedSubresourceBlocks = 0;
+
+/** How many subresource requests were aborted for having no usable address since the last call (then resets). */
+export function takeSuppressedBlockCount() {
+  const n = suppressedSubresourceBlocks;
+  suppressedSubresourceBlocks = 0;
+  return n;
+}
+
 export async function installLivenessRouteGuard(page) {
   if (page && typeof page.route === 'function' && !page._routeInterceptorRegistered) {
     page._routeInterceptorRegistered = true;
@@ -290,7 +361,6 @@ export async function installLivenessRouteGuard(page) {
         await validateUrlSecurity(requestUrl);
         return route.continue();
       } catch (err) {
-        console.warn(`Blocked request to restricted destination (DNS): ${requestUrl} - ${err.message}`);
         // A host that resolves to nothing is a DEAD THIRD-PARTY SCRIPT, not a
         // statement about the posting. Measured 2026-08-14 over a 217-URL
         // recheck: 78 live postings were returned as `uncertain` because an
@@ -300,10 +370,26 @@ export async function installLivenessRouteGuard(page) {
         // opened by hand to confirm: 11,178 characters of live posting and a
         // working apply control, called uncertain because of a dead tracker.
         //
+        // A tracker the user's own DNS filter blocks says nothing about the
+        // posting either. validateUrlSecurity tags that answer `dns_sinkhole`.
+        // Measured 2026-10-11 over 35 postings on 19 boards, with Control D
+        // as the resolver: 20 read blocked_host because of Google Analytics,
+        // DoubleClick, Cloudflare Insights, LinkedIn's scripts and the like, and
+        // 11 of the 20 had a visible apply control. AdGuard DNS: 12 blocked_host.
+        //
         // The request is still aborted either way, so the egress guard loses
         // nothing. Only the VERDICT stops being poisoned, and only for a
-        // subresource: if the main document itself cannot resolve, that is a
+        // subresource: if the main document itself has no usable address, that is a
         // real finding about the posting and still counts.
+        //
+        // It counts as `uncertain` under its DNS tag, though, not as `blocked_host`.
+        // That code says the URL points into private space, and `scan --verify`
+        // records it as skipped_blocked_host, for good. No usable address can just
+        // as well be a DNS outage or the user's own filter, which say nothing lasting
+        // about the URL. The catch in checkUrlLiveness treats a DNS failure as
+        // transient for the same reason, and `--verify` keeps this verdict as it
+        // keeps a navigation_error.
+        //
         // Whether this was the main document or a subresource can only be asked
         // of a real Playwright request. Callers may pass a lighter route double
         // (the test suite does, with request() returning just a url()), and for
@@ -318,8 +404,17 @@ export async function installLivenessRouteGuard(page) {
         const isMainDocument = canTell
           ? request.isNavigationRequest() && request.frame() === page.mainFrame()
           : true;
-        if (err?.livenessCode !== 'dns_no_addresses' || isMainDocument) {
+        const noUsableAddress = err?.livenessCode === 'dns_no_addresses' || err?.livenessCode === 'dns_sinkhole';
+        // A subresource with no usable address is counted, not logged: with a DNS
+        // filter on, every page logged a line per tracker request (440 lines over
+        // 142 postings on 2026-10-16) and buried the verdicts. Everything that
+        // bears on a verdict — the main document, a private address — still logs.
+        if (noUsableAddress && !isMainDocument) suppressedSubresourceBlocks++;
+        else console.warn(`Blocked request to restricted destination (DNS): ${requestUrl} - ${err.message}`);
+        if (!noUsableAddress) {
           page._blockedByGuard = { code: 'blocked_host', reason: err.message };
+        } else if (isMainDocument) {
+          page._blockedByGuard = { code: err.livenessCode, reason: err.message };
         }
         return route.abort('blockedbyclient');
       }
@@ -327,7 +422,51 @@ export async function installLivenessRouteGuard(page) {
   }
 }
 
-export async function checkUrlLiveness(page, url, { extraSettleMs = 0 } = {}) {
+// One navigation of the page (a goto or a reload). If it fails, wait for the
+// main frame to commit Chromium's error page, so the page is settled for
+// whatever navigates it next (see FAILED_NAVIGATION_COMMIT_MS). No other
+// navigation ends the wait: a child frame's, or the old page changing its own
+// URL (a fragment or history change fires framenavigated too), would let the
+// next goto start before the error page commits and interrupts it. A lighter
+// page double without waitForEvent skips the wait.
+async function navigateSettled(page, navigate) {
+  try {
+    return await navigate();
+  } catch (err) {
+    const canWait = typeof page.waitForEvent === 'function' && typeof page.mainFrame === 'function';
+    if (canWait && err?.name !== 'TimeoutError') {
+      await page
+        .waitForEvent('framenavigated', {
+          predicate: (frame) => frame === page.mainFrame() && frame.url().startsWith('chrome-error:'),
+          timeout: FAILED_NAVIGATION_COMMIT_MS,
+        })
+        .catch(() => {});
+    }
+    throw err;
+  }
+}
+
+// A navigation that times out is retried once with a longer budget. A slow
+// careers page (block.xyz took >15 s on a cold load) is live but was answered
+// `uncertain` and stayed unresolved in the queue. Only a timeout earns the retry:
+// a refused connection, a DNS failure or a guard block fails exactly the same way
+// the second time, and the guard verdict must win as before.
+export const NAVIGATE_RETRY_TIMEOUT_MS = 30_000;
+
+export async function gotoWithTimeoutRetry(page, url, {
+  timeoutMs = NAVIGATE_TIMEOUT_MS,
+  retryTimeoutMs = NAVIGATE_RETRY_TIMEOUT_MS,
+} = {}) {
+  const go = (timeout) => navigateSettled(page, () => page.goto(url, { waitUntil: 'domcontentloaded', timeout }));
+  try {
+    return await go(timeoutMs);
+  } catch (err) {
+    if (err?.name !== 'TimeoutError' || page?._blockedByGuard || !(retryTimeoutMs > timeoutMs)) throw err;
+    return go(retryTimeoutMs);
+  }
+}
+
+export async function checkUrlLiveness(page, url, { extraSettleMs = 0, timeoutRetry = true } = {}) {
   const guardError = rejectPrivateOrInvalid(url);
   if (guardError) {
     return { result: 'uncertain', code: guardError.code, reason: guardError.reason };
@@ -337,7 +476,7 @@ export async function checkUrlLiveness(page, url, { extraSettleMs = 0 } = {}) {
   }
   await installLivenessRouteGuard(page);
   try {
-    const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAVIGATE_TIMEOUT_MS });
+    const response = await gotoWithTimeoutRetry(page, url, timeoutRetry ? {} : { retryTimeoutMs: 0 });
     const status = response?.status() ?? 0;
 
     // extraSettleMs is slack for the headed retry, where a JS anti-bot
@@ -345,9 +484,16 @@ export async function checkUrlLiveness(page, url, { extraSettleMs = 0 } = {}) {
     if (extraSettleMs > 0) await page.waitForTimeout(extraSettleMs);
 
     const extractApplyControls = () => {
+      // A design-system button is a custom element: UKG Pro (UltiPro) renders
+      // Apply as <ukg-button>Apply now</ukg-button>, with no role on it. The
+      // native <button> inside its shadow root has no text of its own (the
+      // label is slotted in), so the element itself is the control to read.
+      // No selector matches a tag-name suffix, hence the filter.
+      const customButtons = Array.from(document.querySelectorAll('*'))
+        .filter((element) => element.localName.endsWith('-button'));
       const candidates = Array.from(
         document.querySelectorAll('a, button, input[type="submit"], input[type="button"], [role="button"]')
-      );
+      ).concat(customButtons);
 
       return candidates
         .filter((element) => {
@@ -506,7 +652,8 @@ export async function checkUrlLiveness(page, url, { extraSettleMs = 0 } = {}) {
       try { host = new URL(finalUrl || url).hostname; } catch { /* leave empty, retry test below just fails closed */ }
       if (isBambooHrHost(host)) {
         try {
-          const reloadResponse = await page.reload({ waitUntil: 'domcontentloaded', timeout: NAVIGATE_TIMEOUT_MS });
+          const reloadResponse = await navigateSettled(page, () =>
+            page.reload({ waitUntil: 'domcontentloaded', timeout: NAVIGATE_TIMEOUT_MS }));
           const reloadStatus = reloadResponse?.status() ?? status;
           const reloaded = await pollPage(reloadStatus);
           const reloadVerdict = classifyLiveness({ status: reloadStatus, requestedUrl: url, ...reloaded });
@@ -527,6 +674,22 @@ export async function checkUrlLiveness(page, url, { extraSettleMs = 0 } = {}) {
           };
         }
       }
+    }
+
+    // A page still empty when the poll gives up (after the frame wait, if a
+    // same-origin frame is present) has shown nothing: no posting, no closure
+    // notice, no error page. AGENTS.md calls a loading placeholder unconfirmed,
+    // not closed, and a false `expired` is the expensive direction (see the
+    // iCIMS note above). Measured over 218 loads on 17 ATS: 18 were still empty
+    // when the poll ended, 16 of them live postings. Only a body with no text at
+    // all qualifies: a short page ("Page not found", a header and footer) keeps
+    // insufficient_content.
+    if (verdict.code === 'insufficient_content' && !reading.bodyText.trim()) {
+      verdict = {
+        result: 'uncertain',
+        code: 'empty_page',
+        reason: 'page still empty when the poll ended — not trusted as evidence of removal',
+      };
     }
 
     if (page && page._blockedByGuard) {
@@ -636,7 +799,9 @@ export async function checkUrlLivenessWithFallback(page, url, { getHeadedPage } 
   if (!headedPage) {
     return first;
   }
-  const second = await checkUrlLiveness(headedPage, url, { extraSettleMs: 3_000 });
+  // The headed retry is for an anti-bot wall, which loaded; it does not also
+  // earn the slow-page retry, which would push one URL past a minute.
+  const second = await checkUrlLiveness(headedPage, url, { extraSettleMs: 3_000, timeoutRetry: false });
   if (isChallengeResult(second)) {
     return { ...second, reason: `${second.reason} (headed retry also blocked)` };
   }

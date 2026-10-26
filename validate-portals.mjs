@@ -7,14 +7,15 @@
  *   node validate-portals.mjs
  *   node validate-portals.mjs --file templates/portals.example.yml
  *   node validate-portals.mjs --self-test
+ *   node validate-portals.mjs --help
  */
 
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { join, dirname, resolve } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath, pathToFileURL } from 'url';
-import * as yaml from 'js-yaml';
-import { flagValue, hasFlag } from './lib/cli-flags.mjs';
+import { loadYaml } from './lib/yaml-document.mjs';
+import { flagValue, hasFlag, validateFlags } from './lib/cli-flags.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 import { barePrefixDomainKeywords } from './title-keywords.mjs';
 
@@ -94,6 +95,20 @@ function validateUrl(value, path, errors) {
   }
   if (!['http:', 'https:'].includes(parsed.protocol)) {
     add(errors, path, `unsupported URL protocol: ${parsed.protocol}`);
+  }
+}
+
+// buildTitleFilter reads only an array as a keyword list and drops anything else,
+// so a bare string leaves the filter matching every title. validateKeywordList
+// accepts one (location_filter and content_filter do wrap it), so the title
+// filter's own lists are checked here. A warning, not an error: title_filter has
+// always been lenient about this and a hard failure would break configs that
+// currently load.
+function warnBareStringKeywords(block, path, warnings) {
+  for (const key of ['positive', 'negative']) {
+    if (typeof block[key] === 'string') {
+      add(warnings, `${path}.${key}`, `a bare string is ignored by the title filter, so this list does nothing; write it as a list: [${JSON.stringify(block[key])}]`);
+    }
   }
 }
 
@@ -185,6 +200,7 @@ export async function validatePortalsConfig(config, { providerIds = new Set() } 
     if (!isObject(config.title_filter)) {
       add(errors, 'title_filter', 'title_filter must be an object');
     } else {
+      warnBareStringKeywords(config.title_filter, 'title_filter', warnings);
       validateKeywordList(config.title_filter.positive, 'title_filter.positive', errors);
       validateKeywordList(config.title_filter.negative, 'title_filter.negative', errors);
       validateKeywordList(config.title_filter.seniority_boost, 'title_filter.seniority_boost', errors);
@@ -210,6 +226,7 @@ export async function validatePortalsConfig(config, { providerIds = new Set() } 
           add(errors, `title_filter_full.${key}`, `unknown title_filter_full field - expected one of ${TITLE_FILTER_FIELDS.join(', ')}`);
         }
       }
+      warnBareStringKeywords(config.title_filter_full, 'title_filter_full', warnings);
       validateKeywordList(config.title_filter_full.positive, 'title_filter_full.positive', errors);
       validateKeywordList(config.title_filter_full.negative, 'title_filter_full.negative', errors);
       validateKeywordList(config.title_filter_full.seniority_boost, 'title_filter_full.seniority_boost', errors);
@@ -240,6 +257,22 @@ export async function validatePortalsConfig(config, { providerIds = new Set() } 
       for (const idx of barePrefixDomainKeywords(config.domain_filter)) {
         add(errors, `domain_filter[${idx}]`, 'a word:/stem: prefix needs a term after it');
       }
+    }
+  }
+
+  // The languages a posting is wanted in, best first. scan.mjs skips an entry
+  // it cannot read, so a malformed list would quietly fall back to the default
+  // version — the typo can only surface here.
+  if (config.preferred_languages !== undefined) {
+    const list = config.preferred_languages;
+    if (!Array.isArray(list) && typeof list !== 'string') {
+      add(errors, 'preferred_languages', 'preferred_languages must be a list of language codes (e.g. [en])');
+    } else {
+      (Array.isArray(list) ? list : [list]).forEach((entry, idx) => {
+        if (typeof entry !== 'string' || !entry.trim()) {
+          add(errors, `preferred_languages[${idx}]`, 'each preferred language must be a non-empty language code');
+        }
+      });
     }
   }
 
@@ -305,6 +338,9 @@ export async function validatePortalsConfig(config, { providerIds = new Set() } 
       if (config.location_filter.strict !== undefined && typeof config.location_filter.strict !== 'boolean') {
         add(errors, 'location_filter.strict', 'must be a boolean when set');
       }
+      if (config.location_filter.remote_title_fallback !== undefined && typeof config.location_filter.remote_title_fallback !== 'boolean') {
+        add(errors, 'location_filter.remote_title_fallback', 'must be a boolean when set');
+      }
     }
   }
 
@@ -316,17 +352,21 @@ export async function validatePortalsConfig(config, { providerIds = new Set() } 
       validateKeywordList(config.content_filter.negative, 'content_filter.negative', errors);
       if (config.content_filter.by_title_keyword !== undefined) {
         if (!isObject(config.content_filter.by_title_keyword)) {
-          add(errors, 'content_filter.by_title_keyword', 'by_title_keyword must be an object keyed by title_filter.positive keyword');
+          add(errors, 'content_filter.by_title_keyword', 'by_title_keyword must be an object keyed by title_filter.positive (or title_filter_full.positive) keyword');
         } else {
+          // scan-ats-full matches titles against title_filter_full when it is
+          // set and scopes by_title_keyword by that match, so a key that only
+          // exists there is live config for the sweep, not dead config.
           const titlePositive = new Set(
-            (Array.isArray(config.title_filter?.positive) ? config.title_filter.positive : [])
+            [config.title_filter?.positive, config.title_filter_full?.positive]
+              .flatMap(list => (Array.isArray(list) ? list : []))
               .filter(k => typeof k === 'string')
               .map(k => k.trim().toLowerCase())
           );
           for (const [kw, rule] of Object.entries(config.content_filter.by_title_keyword)) {
             const path = `content_filter.by_title_keyword.${kw}`;
             if (!titlePositive.has(kw.trim().toLowerCase())) {
-              add(warnings, path, `"${kw}" does not match any title_filter.positive keyword and will never apply`);
+              add(warnings, path, `"${kw}" does not match any title_filter.positive or title_filter_full.positive keyword and will never apply`);
             }
             if (!isObject(rule)) {
               add(errors, path, 'must be an object with positive/negative keyword lists');
@@ -375,6 +415,13 @@ export async function validatePortalsConfig(config, { providerIds = new Set() } 
       if (!isObject(entry)) {
         add(errors, base, `${noun} entry must be an object`);
         continue;
+      }
+      // Every consumer reads only a boolean `false` as "off". js-yaml follows
+      // YAML 1.2, where `no`, `off` and a quoted "false" are strings, so such an
+      // entry is scanned while looking disabled. Flagged here, because the
+      // scanners cannot tell a typo from a deliberate non-boolean.
+      if (entry.enabled !== undefined && typeof entry.enabled !== 'boolean') {
+        add(errors, `${base}.enabled`, `enabled must be true or false, got ${JSON.stringify(entry.enabled)} - only a boolean false turns this ${noun} off, so it is still scanned`);
       }
       if (entry.enabled === false) continue;
 
@@ -458,7 +505,7 @@ async function validateFile(filePath) {
     throw new Error(`file not found: ${filePath}`);
   }
   const providerIds = await loadProviderIds();
-  const parsed = yaml.load(readFileSync(filePath, 'utf-8'));
+  const parsed = loadYaml(readFileSync(filePath, 'utf-8'));
   return validatePortalsConfig(parsed, { providerIds });
 }
 
@@ -484,8 +531,30 @@ tracked_companies:
   }
 }
 
+const KNOWN_FLAGS = ['--file', '--self-test', '--help', '-h'];
+const VALUE_FLAGS = ['--file'];
+
+const USAGE = `Usage:
+  node validate-portals.mjs                                    # validate portals.yml in the data root
+  node validate-portals.mjs --file templates/portals.example.yml  # validate a specific portals file
+  node validate-portals.mjs --self-test                        # run the built-in fixture checks
+  node validate-portals.mjs --help                             # print this usage block and exit`;
+
 async function main() {
   const args = process.argv.slice(2);
+  // Before any file is read: an unrecognized flag exits 1, --help/-h prints
+  // USAGE and exits 0. Neither used to be checked at all (#4601) — only
+  // --self-test and --file were read, so `--fiel templates/portals.example.yml`
+  // validated the data root's own portals.yml and exited 0 with its counts.
+  // The path on the first output line was the only hint that the file the
+  // caller named was never opened.
+  // requireOperand: without it, `--file --self-test` reads --self-test as the
+  // file path (flagValue() returns args[idx + 1] unconditionally, with no check
+  // that it is not itself another flag), and a bare trailing --file reaches
+  // resolve('') — the current directory. Same shape, same fix as the sibling
+  // verify-portals.mjs (#4250/#4254).
+  validateFlags(args, KNOWN_FLAGS, USAGE, { valueFlags: VALUE_FLAGS, requireOperand: true });
+
   if (args.includes('--self-test')) {
     await runSelfTest();
     return;

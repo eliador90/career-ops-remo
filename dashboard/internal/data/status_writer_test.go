@@ -44,6 +44,9 @@ func TestDashboardStatusLifecycleMatchesCLIAndWeb(t *testing.T) {
 					t.Fatalf("%v: %s", err, out)
 				}
 			}
+			// The ledger is stamped with the local date at write time. Bracket
+			// the writes so a run that crosses local midnight still passes.
+			firstDay := time.Now().Format("2006-01-02")
 			update("Applied", "sent application")
 			update("Applied", "sent application")
 			followups, err := os.ReadFile(filepath.Join(filepath.Dir(tracker), "follow-ups.md"))
@@ -66,13 +69,18 @@ func TestDashboardStatusLifecycleMatchesCLIAndWeb(t *testing.T) {
 			if caller == "web" {
 				source = "web"
 			}
+			lastDay := time.Now().Format("2006-01-02")
 			for i, pair := range []string{"Evaluated\tApplied", "Applied\tRejected"} {
-				want := "42\t" + time.Now().Format("2006-01-02") + "\t" + pair + "\t" + source
-				if strings.TrimSpace(lines[i]) != want {
-					t.Fatalf("ledger row = %q, want %q", lines[i], want)
+				got := strings.TrimSpace(lines[i])
+				var want []string
+				for _, day := range []string{firstDay, lastDay} {
+					want = append(want, "42\t"+day+"\t"+pair+"\t"+source)
+				}
+				if got != want[0] && got != want[1] {
+					t.Fatalf("ledger row = %q, want %q", got, want[0])
 				}
 			}
-			apps := ParseApplications(root)
+			apps := mustParseApplications(t, root)
 			if len(apps) != 1 || apps[0].Status != "Rejected" || apps[0].Notes != "original; sent application" {
 				t.Fatalf("unexpected application: %+v", apps)
 			}
@@ -96,7 +104,7 @@ func TestDashboardStatusReportsLifecycleFailure(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "status saved, but") {
 				t.Fatalf("missing partial success warning: %v", err)
 			}
-			apps := ParseApplications(root)
+			apps := mustParseApplications(t, root)
 			if len(apps) != 1 || apps[0].Status != "Applied" {
 				t.Fatalf("saved status must stay visible: %+v", apps)
 			}
@@ -249,7 +257,7 @@ func TestDashboardStatusPreservesFlagLikeNotes(t *testing.T) {
 			if err := UpdateApplicationStatusAndNotes(root, model.CareerApplication{ReportNumber: "7"}, "Interview", note); err != nil {
 				t.Fatal(err)
 			}
-			apps := ParseApplications(root)
+			apps := mustParseApplications(t, root)
 			if len(apps) != 1 || apps[0].Status != "Interview" || apps[0].Notes != "original; "+note {
 				t.Fatalf("note became a CLI flag: %+v", apps)
 			}
@@ -301,5 +309,41 @@ func TestDashboardStatusRoutineAppliedSaveDoesNotRepair(t *testing.T) {
 	}
 	if strings.Contains(string(ledger), "correction") {
 		t.Fatalf("routine Applied save must not append a correction: %s", ledger)
+	}
+}
+
+// The dashboard kills set-status after 30s from inside Bubble Tea's Update, and
+// a move into Interview may start a JD archive that takes longer. The writer
+// must ask set-status not to wait for it.
+func TestDashboardStatusDetachesJDArchive(t *testing.T) {
+	root := t.TempDir()
+	argvFile := filepath.Join(root, "argv.json")
+	writeStatusTarget(t, filepath.Join(root, "path-resolver.mjs"), "")
+	writeStatusTarget(t, filepath.Join(root, "set-status.mjs"),
+		"import { writeFileSync } from 'node:fs';\n"+
+			"writeFileSync(process.env.ARGV_FILE, JSON.stringify(process.argv.slice(2)));\n"+
+			"console.log(JSON.stringify({changed:true,newStatus:'Interview'}))")
+	t.Setenv("ARGV_FILE", argvFile)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(cwd); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := UpdateApplicationStatus(root, model.CareerApplication{ReportNumber: "7"}, "Interview"); err != nil {
+		t.Fatal(err)
+	}
+	argv, err := os.ReadFile(argvFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(argv), `"--detach-jd-archive"`) {
+		t.Fatalf("status writer must pass --detach-jd-archive, got %s", argv)
 	}
 }

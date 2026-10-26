@@ -14,7 +14,7 @@ Career-ops is built on three commitments that every design decision serves:
 
 The single most important architectural rule: **system files** and **user files** are strictly separated.
 
-- **System layer** — the tool itself: `modes/`, scripts (`*.mjs`), templates, the dashboard. These are versioned and updated by `update-system.mjs`. Listed in `SYSTEM_PATHS`.
+- **System layer** — the tool itself: `modes/`, scripts (`*.mjs`), templates, the dashboard. These are versioned and updated by `update-system.mjs`. Listed in `SYSTEM_PATHS`, in `lib/update-manifest.mjs`.
 - **User layer** — your data: `cv.md`, `config/profile.yml`, `modes/_profile.md`, `data/`, `reports/`, `jds/`, etc. The updater **never** touches these. Listed in `USER_PATHS`.
 
 `DATA_CONTRACT.md` is the source of truth for this boundary, and `updater-migration-tests.mjs` enforces that no system path ever overlaps a user path.
@@ -25,7 +25,7 @@ Settled doctrine ([#918](https://github.com/career-ops-hq/career-ops/issues/918)
 
 ## Why the flat root
 
-The repo keeps its ~70 scripts at the root deliberately ([#1386](https://github.com/career-ops-hq/career-ops/issues/1386)). Path stability is a feature here, not an accident: the updater's `SYSTEM_PATHS` allowlist, community plugins, docs, guides, and the muscle memory of thousands of users (`node scan.mjs`) all reference these paths. A cosmetic reorganization would break forks and plugins for no functional gain. The conventions that keep the flat root navigable: one script = one job, and every script is registered in `SYSTEM_PATHS` (enforced in CI by the coverage guard).
+The repo keeps its scripts at the root deliberately ([#1386](https://github.com/career-ops-hq/career-ops/issues/1386)). Path stability is a feature here, not an accident: the updater's `SYSTEM_PATHS` allowlist, community plugins, docs, guides, and the muscle memory of thousands of users (`node scan.mjs`) all reference these paths. A cosmetic reorganization would break forks and plugins for no functional gain. The conventions that keep the flat root navigable: one script = one job, and every script is registered in `SYSTEM_PATHS` (enforced in CI by the coverage guard).
 
 Tests are the one thing the flat root does not hold. Suites live in `tests/`, and `test-all.mjs` discovers `tests/**/*.test.mjs` — no registration list, so a new suite runs the moment it is written and a typo cannot silently turn CI green ([#1440](https://github.com/career-ops-hq/career-ops/issues/1440)). Write new ones there; `*.test.mjs` at the repo root is not discovered and will not run.
 
@@ -69,7 +69,7 @@ Every evaluated offer is registered. `data/applications.md` is the canonical tra
 `check-liveness.mjs` / `liveness-*.mjs` verify a posting is still open (zero-token) before it costs evaluation time.
 
 ### Self-update — `update-system.mjs`
-Safely pulls new system files from upstream without touching user data. It backs up, fetches, re-execs the target updater (resolving its import closure so a new import can't break the upgrade), then checks out only `SYSTEM_PATHS`. `BOOTSTRAP_PATHS` covers very old installs.
+Safely pulls new system files from upstream without touching user data. It backs up, fetches, re-execs the target updater (resolving its import closure so a new import can't break the upgrade), then checks out only `SYSTEM_PATHS` (`lib/update-manifest.mjs`, which the updater reads rather than imports so it stays self-loading). `BOOTSTRAP_PATHS` covers very old installs.
 
 ### Multi-CLI entry files
 `CLAUDE.md`, `OPENCODE.md` and `CODEX.md` are thin `@AGENTS.md` wrappers around the canonical `AGENTS.md`. `GEMINI.md` is a legacy no-op guard, so Antigravity does not load the project instructions twice. The `.agents/skills/` entrypoints follow the [open agent skill standard](https://agentskills.io) and route into the same modes.
@@ -98,4 +98,4 @@ scan ──► data/pipeline.md ──► evaluate (oferta + cv) ──► repor
 - The boundary → `DATA_CONTRACT.md`
 - The scoring → `modes/_shared.md` + `modes/oferta.md`
 - Adding a job source → [`providers/ADDING_A_PROVIDER.md`](providers/ADDING_A_PROVIDER.md)
-- The updater → `update-system.mjs`
+- The updater → `update-system.mjs`; the paths it ships → `lib/update-manifest.mjs`

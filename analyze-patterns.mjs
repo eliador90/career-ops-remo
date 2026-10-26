@@ -14,20 +14,35 @@
  */
 
 import { readFileSync, existsSync, realpathSync, writeFileSync, symlinkSync, rmSync } from 'fs';
-import { join, dirname, relative, sep } from 'path';
+import { join, dirname, relative, isAbsolute, sep } from 'path';
 import { fileURLToPath } from 'url';
 import { isMainModule } from './lib/is-main-module.mjs';
-import { load as yamlLoad } from 'js-yaml';
-import { resolveColumns, parseTrackerRow, normalizeVia } from './tracker-parse.mjs';
-import { getCareerOpsRoot } from './path-resolver.mjs';
+import { loadYaml } from './lib/yaml-document.mjs';
+import { resolveColumns, parseTrackerRow, normalizeVia, firstLinkTarget } from './tracker-parse.mjs';
+import { getCareerOpsRoot, resolveTrackerPath } from './path-resolver.mjs';
+import { loadCanonicalStates, resolveCanonicalStateId, foldStatusInput, trackerLinkDirsFor, resolveWorkspaceRoot, resolveWorkspaceRootFor } from './tracker-utils.mjs';
 import { atsVendorOf } from './ats-vendor.mjs';
 import { flagValue, hasFlag, validateFlags } from './lib/cli-flags.mjs';
 import { localToday } from './lib/local-today.mjs';
 
 const CAREER_OPS = getCareerOpsRoot();
-const APPS_FILE = existsSync(join(CAREER_OPS, 'data/applications.md'))
-  ? join(CAREER_OPS, 'data/applications.md')
-  : join(CAREER_OPS, 'applications.md');
+const APPS_FILE = resolveTrackerPath(CAREER_OPS);
+// Report links resolve from the same directories verify-pipeline.mjs checks:
+// the tracker's folder as realpathed and as spelled (a symlinked tracker FILE
+// writes links relative to its target; a symlinked data root, or macOS's
+// /var -> /private/var tmpdir, needs the spelled form, since withinReports()
+// compares lexically), then the data root.
+const TRACKER_DIRS = trackerLinkDirsFor(CAREER_OPS);
+// A CAREER_OPS_TRACKER that points at another workspace brings that
+// workspace's reports/ with it (see resolveWorkspaceRoot): the workspace of
+// the tracker as spelled, and of its target when the tracker is a symlink into
+// another workspace. The data root's own reports/ stays allowed for a tracker
+// kept apart from its reports.
+const REPORTS_ROOTS = [...new Set([
+  join(CAREER_OPS, 'reports'),
+  join(resolveWorkspaceRootFor(CAREER_OPS), 'reports'),
+  join(resolveWorkspaceRoot(APPS_FILE), 'reports'),
+])];
 const REPORTS_DIR = join(CAREER_OPS, 'reports');
 
 const MACHINE_SUMMARY_FIELDS = new Set([
@@ -68,6 +83,8 @@ const MACHINE_SUMMARY_FIELDS = new Set([
   // Reporting line stated by the JD, verbatim (report + Machine Summary only).
   // Allowlisted so it round-trips; no consumer logic yet.
   'reports_to',
+  // Optional local cache metadata; never an input to candidate pattern analysis.
+  'job_facts_cache',
   // Block B's requirement -> importance table, mirrored row by row (evidence
   // tier, importance band, match). Allowlisted so it round-trips; no consumer
   // logic yet, deliberately: importance is score-neutral, so nothing that folds
@@ -95,33 +112,25 @@ const summaryMode = args.includes('--summary');
 let MIN_THRESHOLD = 5;
 let MIN_VENDOR_N = 8;
 
-// --- Status normalization (mirrors verify-pipeline.mjs) ---
-const ALIASES = {
-  'evaluada': 'evaluated', 'condicional': 'evaluated', 'hold': 'evaluated',
-  'evaluar': 'evaluated', 'verificar': 'evaluated',
-  'aplicado': 'applied', 'enviada': 'applied', 'aplicada': 'applied',
-  'applied': 'applied', 'sent': 'applied',
-  'respondido': 'responded',
-  'entrevista': 'interview',
-  'oferta': 'offer',
-  'rechazado': 'rejected', 'rechazada': 'rejected',
-  'contratado': 'hired', 'contratada': 'hired', 'accepted': 'hired', 'accept': 'hired',
-  'descartado': 'discarded', 'descartada': 'discarded',
-  'cerrada': 'discarded', 'cancelada': 'discarded',
-  'no aplicar': 'skip', 'no_aplicar': 'skip', 'monitor': 'skip', 'geo blocker': 'skip',
-};
+// --- Status normalization ---
+// Every alias comes from templates/states.yml, the single source of truth —
+// no table here. states.yml ships with the code, so it is read from the
+// script's own directory, never from the (overridable) data root.
+const CANONICAL_STATES = loadCanonicalStates(
+  join(dirname(fileURLToPath(import.meta.url)), 'templates', 'states.yml'));
 
 function normalizeStatus(raw) {
-  const clean = raw.replace(/\*\*/g, '').trim().toLowerCase()
-    .replace(/\s+\d{4}-\d{2}-\d{2}.*$/, '').trim();
-  return ALIASES[clean] || clean;
+  // An unrecognized status keeps its own folded text, so it still shows up
+  // under its own name in the funnel instead of vanishing.
+  return resolveCanonicalStateId(raw, CANONICAL_STATES)
+    ?? foldStatusInput(String(raw ?? '').replace(/\s+\d{4}-\d{2}-\d{2}.*$/, ''));
 }
 
 export function classifyOutcome(status) {
   const s = normalizeStatus(status);
   // 'hired' is the strongest positive outcome — a landed job. It must not fall
   // through to the 'pending' default, which would drag conversion rates down.
-  if (['hired', 'interview', 'offer', 'responded'].includes(s)) return 'positive';
+  if (['hired', 'interview', 'offer', 'responded', 'assessment'].includes(s)) return 'positive';
   // 'applied' is SENT, not answered: denominator only, never the numerator.
   // Mirrors ADVANCED_STATUSES, which already excludes it.
   if (s === 'applied') return 'awaiting';
@@ -282,16 +291,16 @@ export function knownAtsVendorOf(rawUrl) {
 // or the posting closed) proves neither a submission nor an answer — the same
 // set stats.mjs uses for its canonical funnel. Module-scoped so the self-test
 // can assert membership and the channel-yield pass and self-test share one set.
-const SUBMITTED_STATUSES = new Set(['applied', 'responded', 'interview', 'offer', 'hired', 'rejected']);
+const SUBMITTED_STATUSES = new Set(['applied', 'responded', 'assessment', 'interview', 'offer', 'hired', 'rejected']);
 
 // Statuses that count as "advanced past screening" — STRICTER than
 // outcome=='positive': a bare 'applied' (submitted, no reply yet) does NOT
 // count. 'hired' is the furthest advance of all.
-const ADVANCED_STATUSES = new Set(['responded', 'interview', 'offer', 'hired']);
+const ADVANCED_STATUSES = new Set(['responded', 'assessment', 'interview', 'offer', 'hired']);
 
 // Print order for the CONVERSION FUNNEL summary. A status absent here is
 // silently omitted from the printed funnel, so this must track states.yml.
-const FUNNEL_ORDER = ['evaluated', 'applied', 'responded', 'interview', 'offer', 'hired', 'rejected', 'discarded', 'skip'];
+const FUNNEL_ORDER = ['evaluated', 'applied', 'responded', 'assessment', 'interview', 'offer', 'hired', 'rejected', 'discarded', 'skip'];
 
 function normalizeList(value) {
   if (Array.isArray(value)) return value.map(v => String(v).trim()).filter(Boolean);
@@ -314,7 +323,7 @@ export function parseMachineSummary(content) {
   if (!raw) return null;
 
   try {
-    const parsed = yamlLoad(raw);
+    const parsed = loadYaml(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
     return Object.fromEntries(
       Object.entries(parsed).filter(([key]) => MACHINE_SUMMARY_FIELDS.has(key))
@@ -791,6 +800,11 @@ requirement_importance:
     if (withinReports(escape)) failures.push('containment: traversal path escaped reports/ (path-traversal guard broken)');
     const sibling = join(CAREER_OPS, 'reports-evil', 'x.md');
     if (withinReports(sibling)) failures.push('containment: reports-prefixed sibling dir wrongly accepted');
+    // The same lexical guard against a workspace's reports root (REPORTS_ROOTS).
+    const otherRoot = join(CAREER_OPS, 'workspace', 'reports');
+    if (withinReports(join(otherRoot, '..', '..', 'reports', 'x.md'), otherRoot)) failures.push('containment: traversal escaped a workspace reports root');
+    if (withinReports(join(otherRoot, '..', 'reports-evil', 'x.md'), otherRoot)) failures.push('containment: sibling of a workspace reports root wrongly accepted');
+    if (withinReports(otherRoot, otherRoot)) failures.push('containment: a reports root itself wrongly accepted as a report');
   }
 
   // Symlink-escape + missing-file graceful degradation (#2655). realpath
@@ -864,23 +878,24 @@ function parseTracker() {
 }
 
 // Canonical reports-root containment. A tracker link resolves to a candidate
-// path; accept it only if it stays inside the repo's reports/ directory. Two
+// path; accept it only if it stays inside a reports/ directory (the data
+// root's by default; see REPORTS_ROOTS for the others). Two
 // layers: a cheap lexical traversal guard (no stat) rejects a crafted link like
-// reports/../../etc/passwd, which join() collapses to a repo-relative path that
-// no longer starts with reports/; then realpath canonicalization rejects a
+// reports/../../etc/passwd, which join() collapses to a path that is no longer
+// under reports/; then realpath canonicalization rejects a
 // symlink whose target escapes reports/ (a lexical-only check would follow it).
 // realpathSync throws ENOENT/ENOTDIR for a not-yet-created candidate or a
 // missing reports root — both are non-fatal: a missing candidate falls through
 // to the downstream read (which returns null, preserving prior semantics), a
 // missing root means there are simply no reports. Only genuinely unexpected
-// errors rethrow, matching readTextIfExists. Identical to the guard in
-// upskill.mjs so both sites behave the same.
-function withinReports(candidate) {
-  const repoRelative = relative(CAREER_OPS, candidate).split(sep).join('/');
-  if (!repoRelative.startsWith('reports/') || repoRelative.includes('..')) return false;
+// errors rethrow, matching readTextIfExists. The same guard as upskill.mjs's,
+// with the reports root as a parameter.
+function withinReports(candidate, reportsRoot = join(CAREER_OPS, 'reports')) {
+  const rootRelative = relative(reportsRoot, candidate);
+  if (!rootRelative || isAbsolute(rootRelative) || rootRelative.includes('..')) return false;
   let realRoot;
   try {
-    realRoot = realpathSync(join(CAREER_OPS, 'reports'));
+    realRoot = realpathSync(reportsRoot);
   } catch (err) {
     if (err.code === 'ENOENT' || err.code === 'ENOTDIR') return false;
     throw err;
@@ -1168,7 +1183,7 @@ const DISCARD_REASONS_FILE = join(dirname(fileURLToPath(import.meta.url)), 'temp
  */
 export function loadDiscardReasonVocabulary(file = DISCARD_REASONS_FILE) {
   try {
-    const parsed = yamlLoad(readFileSync(file, 'utf8'));
+    const parsed = loadYaml(readFileSync(file, 'utf8'));
     const reasons = Array.isArray(parsed?.reasons) ? parsed.reasons : [];
     const ids = reasons.map(reason => reason?.id).filter(id => typeof id === 'string' && id);
     return ids.length > 0 ? new Set(ids) : null;
@@ -1343,20 +1358,20 @@ export function analyze(entries = parseTracker()) {
 
   // Enrich entries with report data and classification
   const enriched = entries.map(e => {
-    const reportMatch = e.report.match(/\]\(([^)]+)\)/);
+    const reportTarget = firstLinkTarget(e.report);
     // Tracker links are relative to the tracker file's own directory (see
-    // merge-tracker.mjs link normalization); fall back to repo root for
-    // legacy root-relative links. Each candidate is guarded to reports/
-    // before the read is attempted; parseReport returns null for a missing
-    // file, so no pre-flight existsSync is needed (#2385).
+    // merge-tracker.mjs link normalization, and TRACKER_DIRS); fall back to
+    // repo root for legacy root-relative links. Each candidate is guarded to
+    // a reports/ root before the read is attempted; parseReport returns null
+    // for a missing file, so no pre-flight existsSync is needed (#2385).
     let reportData = null;
-    if (reportMatch) {
+    if (reportTarget != null) {
       const candidates = new Set([
-        join(dirname(APPS_FILE), reportMatch[1]),
-        join(CAREER_OPS, reportMatch[1]),
+        ...TRACKER_DIRS.map((dir) => join(dir, reportTarget)),
+        join(CAREER_OPS, reportTarget),
       ]);
       for (const candidate of candidates) {
-        if (!withinReports(candidate)) continue;
+        if (!REPORTS_ROOTS.some((root) => withinReports(candidate, root))) continue;
         reportData = parseReport(candidate);
         if (reportData) break;
       }

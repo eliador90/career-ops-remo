@@ -1,11 +1,15 @@
 package data
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -37,7 +41,7 @@ func TestTrackerLockDirMatchesNodeProtocol(t *testing.T) {
 func TestUpdateApplicationStatusWaitsForSharedLock(t *testing.T) {
 	t.Setenv("CAREER_OPS_TRACKER_LOCK", "")
 	tempDir, trackerPath := writeTracker(t, insertedColumnTracker)
-	apps := ParseApplications(tempDir)
+	apps := mustParseApplications(t, tempDir)
 	if len(apps) != 1 {
 		t.Fatalf("expected 1 application, got %d", len(apps))
 	}
@@ -73,7 +77,16 @@ func TestUpdateApplicationStatusWaitsForSharedLock(t *testing.T) {
 		lock.release()
 		t.Fatalf("simulate concurrent tracker update: %v", err)
 	}
-	lock.release()
+	// CHECKED, not discarded. release() can return an error without removing
+	// the directory and without marking itself released — os.RemoveAll on a
+	// lock dir whose owner.json still has an open handle fails on Windows where
+	// it succeeds on POSIX. Ignoring it left the lock in place, so the waiter
+	// below blocked for its whole timeout and the test reported "did not resume
+	// after lock release": the message blamed the resume, and the actual cause
+	// had been thrown away.
+	if err := lock.release(); err != nil {
+		t.Fatalf("release first lock: %v", err)
+	}
 
 	select {
 	case err := <-done:
@@ -81,7 +94,11 @@ func TestUpdateApplicationStatusWaitsForSharedLock(t *testing.T) {
 			t.Fatalf("update after lock release: %v", err)
 		}
 	case <-time.After(10 * time.Second):
-		t.Fatal("dashboard update did not resume after lock release")
+		// 10s against a 75ms production retry interval is a 133x margin, so
+		// exhausting it means the waiter never re-acquired — i.e. the lock is
+		// still there. Say whether it is, because that is the difference between
+		// "slow" and "stuck" and the log could not tell them apart.
+		t.Fatalf("dashboard update did not resume after lock release; %s", describeTrackerLock(lock.dir))
 	}
 
 	content, err := os.ReadFile(trackerPath)
@@ -117,7 +134,7 @@ func TestUpdateApplicationStatusOnlyRewritesStatusColumn(t *testing.T) {
 		t.Fatalf("failed to write tracker: %v", err)
 	}
 
-	apps := ParseApplications(tempDir)
+	apps := mustParseApplications(t, tempDir)
 	if len(apps) != 1 {
 		t.Fatalf("expected 1 parsed application, got %d", len(apps))
 	}
@@ -142,7 +159,7 @@ func TestUpdateApplicationStatusOnlyRewritesStatusColumn(t *testing.T) {
 		t.Errorf("status word was replaced inside the Company cell, file now:\n%s", out)
 	}
 
-	reparsed := ParseApplications(tempDir)
+	reparsed := mustParseApplications(t, tempDir)
 	if reparsed[0].Company != "Applied Materials" {
 		t.Errorf("company = %q, want \"Applied Materials\"", reparsed[0].Company)
 	}
@@ -171,7 +188,7 @@ func TestParseApplicationsUsesTrackerNumberColumn(t *testing.T) {
 		t.Fatalf("failed to write applications tracker: %v", err)
 	}
 
-	apps := ParseApplications(tempDir)
+	apps := mustParseApplications(t, tempDir)
 	if len(apps) != 2 {
 		t.Fatalf("expected 2 parsed applications, got %d", len(apps))
 	}
@@ -218,7 +235,7 @@ func TestParseApplicationsResolvesTrackerRelativeReportLinks(t *testing.T) {
 		}
 	}
 
-	apps := ParseApplications(tempDir)
+	apps := mustParseApplications(t, tempDir)
 	if len(apps) != 2 {
 		t.Fatalf("expected 2 parsed applications, got %d", len(apps))
 	}
@@ -238,6 +255,43 @@ func TestParseApplicationsResolvesTrackerRelativeReportLinks(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(tempDir, app.ReportPath)); err != nil {
 			t.Fatalf("row %d: resolved report path %q does not exist: %v", i, app.ReportPath, err)
 		}
+	}
+}
+
+// A report named with parentheses must resolve whole: a `[^)]+` link regex
+// cut `001-acme-(berlin)-….md` at the first `)` (career-ops-hq/career-ops#5482).
+func TestParseApplicationsKeepsParenthesesInReportLink(t *testing.T) {
+	tempDir := t.TempDir()
+	dataDir := filepath.Join(tempDir, "data")
+	reportsDir := filepath.Join(tempDir, "reports")
+	for _, dir := range []string{dataDir, reportsDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("failed to create dir %s: %v", dir, err)
+		}
+	}
+	const report = "001-acme-(berlin)-2026-10-01.md"
+	applications := `# Applications Tracker
+
+| # | Date | Company | Role | Score | Status | PDF | Report | Notes |
+|---|------|---------|------|-------|--------|-----|--------|-------|
+| 1 | 2026-10-01 | Acme (Berlin) | Engineer | 4.2/5 | Evaluated | ❌ | [1](../reports/` + report + `) | note |
+`
+	if err := os.WriteFile(filepath.Join(dataDir, "applications.md"), []byte(applications), 0o644); err != nil {
+		t.Fatalf("failed to write applications tracker: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(reportsDir, report), []byte("# Report\n"), 0o644); err != nil {
+		t.Fatalf("failed to write report: %v", err)
+	}
+
+	apps := mustParseApplications(t, tempDir)
+	if len(apps) != 1 {
+		t.Fatalf("expected 1 parsed application, got %d", len(apps))
+	}
+	if apps[0].ReportNumber != "1" {
+		t.Fatalf("expected report number 1, got %q", apps[0].ReportNumber)
+	}
+	if want := filepath.Join("reports", report); apps[0].ReportPath != want {
+		t.Fatalf("expected report path %q, got %q", want, apps[0].ReportPath)
 	}
 }
 
@@ -271,7 +325,7 @@ const insertedColumnTracker = `# Applications Tracker
 func TestParseApplicationsMapsColumnsByHeader(t *testing.T) {
 	tempDir, _ := writeTracker(t, insertedColumnTracker)
 
-	apps := ParseApplications(tempDir)
+	apps := mustParseApplications(t, tempDir)
 	if len(apps) != 1 {
 		t.Fatalf("expected 1 application, got %d", len(apps))
 	}
@@ -306,7 +360,7 @@ func TestParseApplicationsReadsLocationColumn(t *testing.T) {
 | 1 | 2026-06-01 | Acme | Engineer | Cardiff, UK | 4.0/5 | Applied | | | |
 `)
 
-	apps := ParseApplications(tempDir)
+	apps := mustParseApplications(t, tempDir)
 	if len(apps) != 1 {
 		t.Fatalf("expected 1 application, got %d", len(apps))
 	}
@@ -344,7 +398,7 @@ func TestParseApplicationsUsesTrackerURLBeforeLegacyEnrichment(t *testing.T) {
 		t.Fatalf("write legacy report: %v", err)
 	}
 
-	apps := ParseApplications(tempDir)
+	apps := mustParseApplications(t, tempDir)
 	if len(apps) != 3 {
 		t.Fatalf("expected 3 applications, got %d", len(apps))
 	}
@@ -364,7 +418,7 @@ func TestParseApplicationsUsesTrackerURLBeforeLegacyEnrichment(t *testing.T) {
 func TestUpdateApplicationStatusInsertedColumn(t *testing.T) {
 	tempDir, path := writeTracker(t, insertedColumnTracker)
 
-	apps := ParseApplications(tempDir)
+	apps := mustParseApplications(t, tempDir)
 	if len(apps) != 1 {
 		t.Fatalf("expected 1 application, got %d", len(apps))
 	}
@@ -389,7 +443,7 @@ func TestUpdateApplicationStatusInsertedColumn(t *testing.T) {
 		}
 	}
 
-	reparsed := ParseApplications(tempDir)
+	reparsed := mustParseApplications(t, tempDir)
 	if reparsed[0].Status != "Interview" {
 		t.Errorf("reparsed Status = %q, want \"Interview\"", reparsed[0].Status)
 	}
@@ -435,7 +489,7 @@ func TestParseApplicationsRespectsCareerOpsTracker(t *testing.T) {
 
 	t.Setenv("CAREER_OPS_TRACKER", customTrackerPath)
 
-	apps := ParseApplications(tempDir)
+	apps := mustParseApplications(t, tempDir)
 	if len(apps) != 1 {
 		t.Fatalf("expected 1 parsed application, got %d", len(apps))
 	}
@@ -522,6 +576,14 @@ func TestNormalizeStatus(t *testing.T) {
 		{"Evaluated", "evaluated"},
 		{"Applied", "applied"},
 		{"Responded", "responded"},
+		{"Assessment", "assessment"},
+		{"online screening", "assessment"},
+		{"screening", "assessment"},
+		{"online assessment", "assessment"},
+		{"online_assessment", "assessment"},
+		{"phone screening", "phone screening"},
+		{"Interview - phone screening", "interview"},
+		{"Assessment prep", "assessment prep"},
 		{"Interview", "interview"},
 		{"Offer", "offer"},
 		{"Rejected", "rejected"},
@@ -563,7 +625,7 @@ func TestUpdateApplicationStatusWithStaleInMemoryStatus(t *testing.T) {
 		t.Fatalf("write tracker: %v", err)
 	}
 
-	apps := ParseApplications(tempDir)
+	apps := mustParseApplications(t, tempDir)
 	if len(apps) != 1 {
 		t.Fatalf("expected 1 app, got %d", len(apps))
 	}
@@ -611,7 +673,7 @@ func TestUpdateApplicationStatusRefusesUnrecognizableCell(t *testing.T) {
 		t.Fatalf("write tracker: %v", err)
 	}
 
-	apps := ParseApplications(tempDir)
+	apps := mustParseApplications(t, tempDir)
 	if len(apps) != 1 {
 		t.Fatalf("expected 1 app, got %d", len(apps))
 	}
@@ -684,7 +746,7 @@ func TestParseApplicationsReadsLinkedURLCells(t *testing.T) {
 		t.Fatalf("write report: %v", err)
 	}
 
-	apps := ParseApplications(tempDir)
+	apps := mustParseApplications(t, tempDir)
 	if len(apps) != 2 {
 		t.Fatalf("expected 2 applications, got %d", len(apps))
 	}
@@ -752,5 +814,135 @@ func TestExtractCellURLMatchesNodeReader(t *testing.T) {
 		if got := extractCellURL(tc.Cell); got != tc.Href {
 			t.Errorf("%s: extractCellURL(%q) = %q, Node reader gives %q", tc.Name, tc.Cell, got, tc.Href)
 		}
+	}
+}
+
+// One table, two readers: test-fixtures/tracker-row-split-parity.json is
+// asserted here against splitTrackerRow and in
+// tests/tracker-row-split-parity.test.mjs against Node's splitTrackerCells. A
+// tab only marks a legacy tab-delimited row when the line has at most two
+// pipes; in a pipe table it is note text that set-status.mjs --note keeps
+// verbatim. Splitting such a row on tabs left fewer than eight fields, so
+// ParseApplications dropped it while Node and the web still showed it.
+func TestSplitTrackerRowMatchesNodeReader(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "..", "..", "test-fixtures", "tracker-row-split-parity.json"))
+	if err != nil {
+		t.Fatalf("read shared row-split parity fixture: %v", err)
+	}
+	var fixture struct {
+		Cases []struct {
+			Name  string   `json:"name"`
+			Line  string   `json:"line"`
+			Cells []string `json:"cells"`
+		} `json:"cases"`
+	}
+	if err := json.Unmarshal(content, &fixture); err != nil {
+		t.Fatalf("parse shared row-split parity fixture: %v", err)
+	}
+	if len(fixture.Cases) == 0 {
+		t.Fatal("shared row-split parity fixture has no cases")
+	}
+	for _, tc := range fixture.Cases {
+		if got := splitTrackerRow(tc.Line); !reflect.DeepEqual(got, tc.Cells) {
+			t.Errorf("%s: splitTrackerRow(%q) = %q, Node reader gives %q", tc.Name, tc.Line, got, tc.Cells)
+		}
+	}
+}
+
+// A pipe row whose notes hold a tab must still reach the pipeline.
+func TestParseApplicationsKeepsPipeRowWithTabInNotes(t *testing.T) {
+	tempDir, _ := writeTracker(t, "# Applications Tracker\n\n"+
+		"| # | Date | Company | Role | Score | Status | PDF | Report | Notes |\n"+
+		"|---|------|---------|------|-------|--------|-----|--------|-------|\n"+
+		"| 7 | 2026-09-01 | Example Co | Engineer | 4.2/5 | Applied | ✅ | — | recruiter said:\tcall Tue |\n")
+	apps := mustParseApplications(t, tempDir)
+	if len(apps) != 1 {
+		t.Fatalf("expected 1 application, got %d", len(apps))
+	}
+	if apps[0].Company != "Example Co" || apps[0].Status != "Applied" {
+		t.Errorf("row parsed as company %q status %q, want Example Co / Applied", apps[0].Company, apps[0].Status)
+	}
+}
+
+// describeTrackerLock reports whether a lock directory is still present, and
+// who owns it if so.
+//
+// Exists because "did not resume after lock release" is the same message
+// whether the lock was released and the waiter is merely slow, or the release
+// failed and the waiter is stuck forever. Those need different fixes, and on a
+// runner nobody can attach to, the test output is the only place that
+// distinction can live.
+func describeTrackerLock(dir string) string {
+	info, err := os.Stat(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return fmt.Sprintf("lock dir %s is gone, so the release worked and the waiter did not re-acquire within the budget", dir)
+	}
+	if err != nil {
+		return fmt.Sprintf("lock dir %s could not be examined: %v", dir, err)
+	}
+	owner, ownerErr := readTrackerLockOwner(dir)
+	if ownerErr != nil {
+		return fmt.Sprintf("lock dir %s STILL EXISTS (mode %v); owner unreadable: %v", dir, info.Mode(), ownerErr)
+	}
+	return fmt.Sprintf("lock dir %s STILL EXISTS, held by pid %d token %s since %s — the release did not remove it",
+		dir, owner.PID, owner.Token, owner.StartedAt)
+}
+
+func TestReadFileHeadReturnsAtMostNBytes(t *testing.T) {
+	dir := t.TempDir()
+	big := filepath.Join(dir, "big.md")
+	if err := os.WriteFile(big, bytes.Repeat([]byte("x"), 1<<20), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readFileHead(big, reportHeaderBytes); err != nil || len(got) != reportHeaderBytes {
+		t.Fatalf("big file: got %d bytes, err %v; want %d", len(got), err, reportHeaderBytes)
+	}
+	small := filepath.Join(dir, "small.md")
+	if err := os.WriteFile(small, []byte("**URL:** https://x.test/1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readFileHead(small, reportHeaderBytes); err != nil || string(got) != "**URL:** https://x.test/1\n" {
+		t.Fatalf("small file: got %q, err %v", got, err)
+	}
+	if _, err := readFileHead(filepath.Join(dir, "missing.md"), reportHeaderBytes); err == nil {
+		t.Fatal("missing file must be an error")
+	}
+	if _, err := readFileHead(dir, reportHeaderBytes); err == nil {
+		t.Fatal("a directory must be an error, not an empty header")
+	}
+}
+
+// The enrichment reads only each report's header, so a large report body
+// changes nothing: a URL in the header is found, one past it is not.
+func TestParseApplicationsReadsOnlyTheReportHeaderForURLs(t *testing.T) {
+	tempDir, _ := writeTracker(t, `# Applications Tracker
+
+| # | Date | Company | Role | Score | Status | PDF | Report | Notes |
+|---|------|---------|------|-------|--------|-----|--------|-------|
+| 1 | 2026-08-28 | Acme | Engineer | 4.0/5 | Evaluated | — | [1](../reports/001-acme.md) | header URL |
+| 2 | 2026-08-28 | Globex | Engineer | 4.0/5 | Evaluated | — | [2](../reports/002-globex.md) | body URL |
+`)
+	reportsDir := filepath.Join(tempDir, "reports")
+	if err := os.MkdirAll(reportsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := strings.Repeat("lorem ipsum dolor sit amet\n", 40_000)
+	for name, content := range map[string]string{
+		"001-acme.md":   "# Acme\n\n**URL:** https://jobs.example.com/header\n\n" + body,
+		"002-globex.md": "# Globex\n\n" + body + "**URL:** https://jobs.example.com/body\n",
+	} {
+		if err := os.WriteFile(filepath.Join(reportsDir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	apps := mustParseApplications(t, tempDir)
+	if len(apps) != 2 {
+		t.Fatalf("expected 2 applications, got %d", len(apps))
+	}
+	if got := apps[0].JobURL; got != "https://jobs.example.com/header" {
+		t.Errorf("header URL = %q, want it found", got)
+	}
+	if got := apps[1].JobURL; got != "" {
+		t.Errorf("a URL past the header must not be used, got %q", got)
 	}
 }
