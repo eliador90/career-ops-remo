@@ -56,6 +56,18 @@ try {
 
   // fetch() — single page, maps items to the normalized job shape.
   const entry = { name: 'Acme', careers_url: 'https://join.com/companies/acme-corp' };
+
+  // fetch() — the newer pageProps.pageData page shape parses like initialState.
+  const pageDataHtml = `<html><body><script id="__NEXT_DATA__" type="application/json">${JSON.stringify({
+    props: { pageProps: { pageData: { company: { domain: 'acme-corp' }, jobs: { items: [{ title: 'COO', idParam: 'p1', city: { cityName: 'Zurich' } }], pagination: { pageCount: 1 } } } } },
+  })}</script></body></html>`;
+  const pageDataJobs = await joinProvider.fetch(entry, { fetchText: async () => pageDataHtml });
+  if (pageDataJobs.length === 1 && pageDataJobs[0].url === 'https://join.com/companies/acme-corp/jobs/p1') {
+    pass('join.fetch() reads jobs from the pageProps.pageData page shape');
+  } else {
+    fail(`join.fetch() pageData shape wrong: ${JSON.stringify(pageDataJobs)}`);
+  }
+
   let singleCalls = 0;
   const singleCtx = {
     fetchText: async () => {

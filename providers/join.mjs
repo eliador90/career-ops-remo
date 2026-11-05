@@ -38,6 +38,13 @@ export function extractNextData(html) {
   try { return JSON.parse(match[1]); } catch { return null; }
 }
 
+// join.com is moving company pages from pageProps.initialState to
+// pageProps.pageData (same jobs/company shape); both are live at once.
+function pageStateOf(data) {
+  const pageProps = data?.props?.pageProps;
+  return pageProps?.initialState ?? pageProps?.pageData;
+}
+
 /** @type {Provider} */
 export default {
   id: 'join',
@@ -58,7 +65,7 @@ export default {
     // regardless of the original careers_url.
     const firstHtml = await ctx.fetchText(baseUrl, { redirect: 'error' });
     const firstData = extractNextData(firstHtml);
-    const state = firstData?.props?.pageProps?.initialState;
+    const state = pageStateOf(firstData);
     if (!state) throw new Error('join: __NEXT_DATA__ not found or unexpected structure');
 
     const firstJobs = state.jobs?.items;
@@ -79,7 +86,7 @@ export default {
     for (let page = 2; page <= pageCount; page++) {
       const html = await ctx.fetchText(`${baseUrl}?page=${page}`, { redirect: 'error' });
       const data = extractNextData(html);
-      const pageState = data?.props?.pageProps?.initialState;
+      const pageState = pageStateOf(data);
       if (!pageState) throw new Error('join: __NEXT_DATA__ not found or unexpected structure');
       const pageItems = pageState.jobs?.items;
       if (!Array.isArray(pageItems)) throw new Error('join: __NEXT_DATA__ not found or unexpected structure');
