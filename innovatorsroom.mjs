@@ -54,7 +54,7 @@
 
 import { readFileSync, writeFileSync, existsSync, appendFileSync } from 'fs';
 import { isMainModule } from './lib/is-main-module.mjs';
-import * as yaml from 'js-yaml';
+import { loadYaml } from './lib/yaml-document.mjs';
 import { buildTitleFilter, buildLocationFilter } from './scan.mjs';
 import { decodeEntities } from './providers/_html-entities.mjs';
 import { DEFAULT_USER_AGENT } from './user-agent.mjs';
@@ -478,6 +478,10 @@ function argVal(args, flag) {
 
 async function main() {
   const args = process.argv.slice(2);
+  if (args.includes('--help') || args.includes('-h')) {
+    console.log('Usage: node innovatorsroom.mjs <plaintext-file> [<html-file>] [--issue N] [--date YYYY-MM-DD] [--dry-run]');
+    process.exit(0);
+  }
   const dryRun = args.includes('--dry-run');
   const [file, htmlFile] = collectPositionals(args);
   const issue = argVal(args, '--issue');
@@ -510,7 +514,7 @@ async function main() {
   }
 
   // ── Filter (reuse the portal scanner's filters) ─────────────────────
-  const cfg = yaml.load(readFileSync(PORTALS_PATH, 'utf-8'));
+  const cfg = loadYaml(readFileSync(PORTALS_PATH, 'utf-8')) ?? {};
   const titleOk = buildTitleFilter(cfg.title_filter);
   const locOk = buildLocationFilter(cfg.location_filter);
 

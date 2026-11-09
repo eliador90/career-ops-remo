@@ -43,13 +43,14 @@
 
 import { toEpochMs } from './_dates.mjs';
 import { decodeEntities } from './_html-entities.mjs';
+import { BROWSER_LIKE_USER_AGENT } from './_http.mjs';
 
 const LIST_URL = 'https://fractionalpulse.com/jobs';
 const ORIGIN = 'https://fractionalpulse.com';
 const DEFAULT_MAX_DETAIL = 80;
 const DETAIL_CONCURRENCY = 6;
 const BROWSER_HEADERS = {
-  'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'user-agent': BROWSER_LIKE_USER_AGENT,
   'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
 };
 

@@ -173,7 +173,12 @@ templates/*
 !templates/ats-rules.yml
 !templates/discard-reasons.yml
 !templates/immigration-status-requirements.yml
+!templates/jurisdiction-accommodation-notice.yml
 !templates/jurisdiction-ai-screening-disclosure.yml
+!templates/jurisdiction-candidate-fees.yml
+!templates/jurisdiction-unpaid-placement.yml
+!templates/jurisdiction-vacancy-disclosure.yml
+!templates/panelist-roles.yml
 !templates/jurisdiction-prohibited-content.yml
 !templates/jurisdiction-relocation-tax.yml
 !templates/protected-grounds.yml
